@@ -1,0 +1,3 @@
+[submodule "baselines/niid_bench/leaf"]
+	path = baselines/niid_bench/leaf
+	url = https://github.com/TalwalkarLab/leaf
