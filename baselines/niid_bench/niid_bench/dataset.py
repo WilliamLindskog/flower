@@ -19,6 +19,7 @@ def load_datasets(
     num_clients: int,
     val_ratio: float = 0.1,
     seed: Optional[int] = 42,
+    fraction: Optional[float] = None,
 ) -> Tuple[List[DataLoader], List[DataLoader], DataLoader]:
     """Create the dataloaders to be fed into the model.
 
@@ -70,6 +71,7 @@ def load_datasets(
             similarity=1.0,
             seed=seed,
             dataset_name=config.name,
+            fraction=fraction,
         )
     elif partitioning == "iid_noniid":
         similarity = 0.5

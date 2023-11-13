@@ -18,6 +18,7 @@ from niid_bench.dataset import load_datasets
 from niid_bench.server_fednova import FedNovaServer
 from niid_bench.server_scaffold import ScaffoldServer, gen_evaluate_fn
 from niid_bench.strategy import FedNovaStrategy, ScaffoldStrategy
+from niid_bench.utils import prepare_model_config
 
 
 @hydra.main(config_path="conf", config_name="fedavg_base", version_base=None)
@@ -30,10 +31,7 @@ def main(cfg: DictConfig) -> None:
         An omegaconf object that stores the hydra config.
     """
     # 1. Print parsed config
-    if "mnist" in cfg.dataset_name:
-        cfg.model.input_dim = 256
-        # pylint: disable=protected-access
-        cfg.model._target_ = "niid_bench.models.CNNMnist"
+    cfg = prepare_model_config(cfg)
     print(OmegaConf.to_yaml(cfg))
 
     # 2. Prepare your dataset
@@ -41,7 +39,15 @@ def main(cfg: DictConfig) -> None:
         config=cfg.dataset,
         num_clients=cfg.num_clients,
         val_ratio=cfg.dataset.val_split,
+        fraction=cfg.dataset.frac,
     )
+
+    # print length of each dataset
+    print("Length of each dataset:")
+    for i, trainloader in enumerate(trainloaders):
+        print(f"Client {i}: {len(trainloader.dataset)}")
+    print(f"Test: {len(testloader.dataset)}")
+    print(f"Val: {len(valloaders[0].dataset)}")
 
     # 3. Define your clients
     client_fn = None

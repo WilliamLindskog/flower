@@ -10,8 +10,19 @@ from torch.autograd import Variable
 from torch.utils.data import ConcatDataset, Dataset, Subset
 from torchvision.datasets import CIFAR10, MNIST, FashionMNIST
 
+import pandas as pd
+from pathlib import Path
 
-def _download_data(dataset_name="emnist") -> Tuple[Dataset, Dataset]:
+from .constants import PATHS
+
+import os 
+import subprocess
+import json
+
+from sklearn.model_selection import train_test_split
+
+
+def _download_data(dataset_name="emnist", fraction=None) -> Tuple[Dataset, Dataset]:
     """Download the requested dataset. Currently supports cifar10, mnist, and fmnist.
 
     Returns
@@ -100,15 +111,151 @@ def _download_data(dataset_name="emnist") -> Tuple[Dataset, Dataset]:
             download=True,
             transform=transform_test,
         )
+    elif dataset_name in ['femnist', 'synthetic']:
+        # Set femnist and data path
+        FL_BENCH_ROOT = Path(__file__).parent.parent
+        data_root = FL_BENCH_ROOT / Path(PATHS[dataset_name])
+        data_dir = data_root / 'data'
+        data_path = data_dir / f'{dataset_name}.csv'
+
+        if not _check_data_gen(data_dir):
+            _gen_leaf_data(data_root, dataset_name)
+
+        # Create femnist df if not exists
+        if not data_path.exists():
+            _create_df(data_dir, tag=f'{dataset_name}')
+
+        # Read femnist data
+        data = pd.read_csv(data_path)
+
+        if fraction is not None:
+            data = data.sample(frac=fraction)
+            data = data.reset_index(drop=True)
+
+        # encode user column
+        user_encoder = {user: i for i, user in enumerate(data['user'].unique())}
+        data['user'] = data['user'].apply(lambda x: user_encoder[x])
+
+        # Create train and test set
+        trainset, testset = train_test_split(data, test_size=0.1, random_state=42)
+
     else:
         raise NotImplementedError
 
     return trainset, testset
 
+def _gen_leaf_data(data_root: Path, dataset_name: str) -> None:
+    """ Generate leaf data.
+    
+    Parameters
+    ----------
+    data_root : Path
+        Path to data root.
+    dataset_name : str
+        Name of dataset.
+        
+    Returns
+    -------
+    None
+    """
+
+    cwd = os.getcwd()
+    os.chdir(data_root)
+
+    # run subprocess to generate data
+    if dataset_name == 'femnist':
+        subprocess.run(
+            [   
+                
+                'bash', 
+                './preprocess.sh',
+                '-s', "niid", 
+                '--sf', "0.2",
+                '-k', "128",
+                '-t', 'sample'
+            ]
+        )
+    else:
+        subprocess.run(
+            [   
+                'python', 
+                './main.py',
+                '-num-tasks', "3000", 
+                '-num-classes', "10",
+                '-num-dim', "20",
+            ]
+        )
+
+        subprocess.run(
+            [   
+                'bash', 
+                './preprocess.sh',
+                '--sf', "1.0", 
+                '-k', "128",
+                '-t', "sample",
+            ]
+        )
+
+    os.chdir(cwd)
+
+def _check_data_gen(data_path: Path) -> bool:
+    """ Check if data is already generated.
+    
+    Parameters
+    ----------
+    data_path : Path
+        Path to data.
+
+    Returns
+    -------
+    bool
+        True if data is already generated, False otherwise.
+    """
+    return (data_path / 'train').exists() and (data_path / 'test').exists()
+
+def _create_df(data_dir: Path, tag: str = None) -> None:
+    """ Create femnist df.
+    
+    Parameters
+    ----------
+    data_path : Path
+        Path to data.
+    femnist_data_path : Path
+        Path to femnist data.
+        
+    Returns
+    -------
+    None
+    """
+
+    train_path, test_path = data_dir / 'train', data_dir / 'test'
+    df_list = []
+    for _, path in enumerate([train_path, test_path]):
+        for file in path.glob('*'):
+            print(file)
+            with open(file) as f:
+                data = json.load(f)
+                users = data['users']
+                for user in users:
+                    user_data = {'x': data['user_data'][user]['x'], 'y': data['user_data'][user]['y']}
+                    for i in range(len(user_data['x'])):
+                        user_data['x'][i] = np.array(user_data['x'][i])
+                        for j in range(len(user_data['x'][i])):
+                            user_data[f'x_{j}'] = user_data['x'][i][j]
+                        user_data['y'][i] = np.array(user_data['y'][i])
+                        df_temp = pd.DataFrame({k: [v] for k, v in user_data.items() if k not in ['x', 'y']})
+                        df_temp['y'] = user_data['y'][i]
+                        df_temp['user'] = user
+                        df_list.append(df_temp)
+    # name df based on n
+    df = pd.concat(df_list)
+    data_path = data_dir / f'{tag}.csv'
+    df.to_csv(data_path, index=False)
+
 
 # pylint: disable=too-many-locals
 def partition_data(
-    num_clients, similarity=1.0, seed=42, dataset_name="cifar10"
+    num_clients, similarity=1.0, seed=42, dataset_name="cifar10", fraction=None
 ) -> Tuple[List[Dataset], Dataset]:
     """Partition the dataset into subsets for each client.
 
@@ -126,7 +273,13 @@ def partition_data(
     Tuple[List[Subset], Dataset]
         The list of datasets for each client, the test dataset.
     """
-    trainset, testset = _download_data(dataset_name)
+    trainset, testset = _download_data(dataset_name, fraction=fraction)
+
+    if isinstance(trainset, pd.DataFrame):
+        # convert to tabular dataset, target column is "y"
+        trainset = TabularDataset(trainset, target="y")
+        testset = TabularDataset(testset, target="y")
+
     trainsets_per_client = []
     # for s% similarity sample iid data per client
     s_fraction = int(similarity * len(trainset))
@@ -215,6 +368,9 @@ def partition_data_dirichlet(
         The list of datasets for each client, the test dataset.
     """
     trainset, testset = _download_data(dataset_name)
+    # if instance is pandas dataframe, create tabular dataset
+    if isinstance(trainset, pd.DataFrame):
+        pass
     min_required_samples_per_client = 10
     min_samples = 0
     prng = np.random.default_rng(seed)
@@ -310,6 +466,44 @@ def partition_data_label_quantity(
     trainsets_per_client = [Subset(trainset, idxs) for idxs in idx_clients]
     return trainsets_per_client, testset
 
+class TabularDataset(Dataset):
+    """Tabular dataset."""
 
-if __name__ == "__main__":
-    partition_data(100, 0.1)
+    def __init__(self, df: pd.DataFrame, target: str = "y") -> None:
+        """Initialise the dataset.
+
+        Parameters
+        ----------
+        df : pd.DataFrame
+            The dataframe containing the data.
+        target : str, optional
+            The name of the target column, by default "y"
+        """
+        self.df = df
+        self.target = target
+
+    def __len__(self) -> int:
+        """Return the length of the dataset."""
+        return len(self.df)
+
+    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Get the item at the given index.
+
+        Parameters
+        ----------
+        idx : int
+            The index of the item to get.
+
+        Returns
+        -------
+        Tuple[torch.Tensor, torch.Tensor]
+            The features and the target.
+        """
+        row = self.df.iloc[idx]
+        x = torch.tensor(row.drop(self.target).values, dtype=torch.float32)
+        y = torch.tensor(row[self.target], dtype=torch.long)
+        return x, y
+
+
+#if __name__ == "__main__":
+#    partition_data(100, 0.1)
