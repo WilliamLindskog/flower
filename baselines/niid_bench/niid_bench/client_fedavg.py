@@ -9,7 +9,7 @@ from hydra.utils import instantiate
 from omegaconf import DictConfig
 from torch.utils.data import DataLoader
 
-from niid_bench.models import test, train_fedavg
+from niid_bench.models.aggregation import test, train_fedavg
 
 
 # pylint: disable=too-many-instance-attributes

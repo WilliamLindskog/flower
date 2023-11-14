@@ -125,12 +125,20 @@ def _download_data(dataset_name="emnist", fraction=None) -> Tuple[Dataset, Datas
         if not data_path.exists():
             _create_df(data_dir, tag=f'{dataset_name}')
 
-        # Read femnist data
+        # Read data
         data = pd.read_csv(data_path)
 
         if fraction is not None:
             data = data.sample(frac=fraction)
             data = data.reset_index(drop=True)
+
+        # remove columns with 95% of the same value
+        if dataset_name == 'femnist':
+            print("Number of columns: ", len(data.columns))
+            for col in data.columns:
+                if data[col].value_counts(normalize=True).values[0] > 0.95:
+                    data.drop(col, axis=1, inplace=True)
+            print("Number of columns after removing columns with 95% of the same value: ", len(data.columns))
 
         # encode user column
         user_encoder = {user: i for i, user in enumerate(data['user'].unique())}
@@ -138,7 +146,42 @@ def _download_data(dataset_name="emnist", fraction=None) -> Tuple[Dataset, Datas
 
         # Create train and test set
         trainset, testset = train_test_split(data, test_size=0.1, random_state=42)
+    elif dataset_name in ['smoking', 'heart', 'lumpy', 'machine', 'insurance']:
+        FL_BENCH_ROOT = Path(__file__).parent.parent
+        data_path = FL_BENCH_ROOT / Path(PATHS[dataset_name])
 
+        data = pd.read_csv(data_path)
+
+        def standard_preprocessing(dataset: pd.DataFrame) -> pd.DataFrame:
+            """Processing insurance dataset."""
+            # Encode categorical features
+            for col in dataset.columns:
+                if dataset[col].dtype == 'object':
+                    print("Encoding categorical feature: ", col)
+                    dataset[col] = dataset[col].astype('category').cat.codes
+                    # Set to int64
+                    dataset[col] = dataset[col].astype('int64')
+                    
+            return dataset
+        
+        if dataset_name == 'smoking':
+            # Drop ID and oral column
+            data.drop('ID', axis=1, inplace=True)
+            data.drop('oral', axis=1, inplace=True)
+        elif dataset_name == 'heart':
+            data.drop('slope', axis=1, inplace=True)
+            data.drop('thal', axis=1, inplace=True)
+            data.drop('ca', axis=1, inplace=True)
+
+        # remove rows that has ? in it
+        data = data.replace('?', np.nan)
+        data = data.dropna()
+
+        # Standard preprocessing
+        data = standard_preprocessing(data)
+
+        # Create train and test set
+        trainset, testset = train_test_split(data, test_size=0.1, random_state=42)
     else:
         raise NotImplementedError
 
@@ -481,6 +524,10 @@ class TabularDataset(Dataset):
         """
         self.df = df
         self.target = target
+
+    def __num_columns__(self) -> int:
+        """Return the number of columns."""
+        return len(self.df.columns)
 
     def __len__(self) -> int:
         """Return the length of the dataset."""

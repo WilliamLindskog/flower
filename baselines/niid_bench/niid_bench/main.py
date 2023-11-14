@@ -18,7 +18,7 @@ from niid_bench.dataset import load_datasets
 from niid_bench.server_fednova import FedNovaServer
 from niid_bench.server_scaffold import ScaffoldServer, gen_evaluate_fn
 from niid_bench.strategy import FedNovaStrategy, ScaffoldStrategy
-from niid_bench.utils import prepare_model_config
+from niid_bench.utils import prepare_model_config, plot_metric_from_history
 
 
 @hydra.main(config_path="conf", config_name="fedavg_base", version_base=None)
@@ -41,13 +41,8 @@ def main(cfg: DictConfig) -> None:
         val_ratio=cfg.dataset.val_split,
         fraction=cfg.dataset.frac,
     )
-
-    # print length of each dataset
-    print("Length of each dataset:")
-    for i, trainloader in enumerate(trainloaders):
-        print(f"Client {i}: {len(trainloader.dataset)}")
-    print(f"Test: {len(testloader.dataset)}")
-    print(f"Val: {len(valloaders[0].dataset)}")
+    if len(trainloaders[0].dataset[0][0]) != cfg.model.input_dim:
+        cfg.model.input_dim = len(trainloaders[0].dataset[0][0])
 
     # 3. Define your clients
     client_fn = None
@@ -110,6 +105,23 @@ def main(cfg: DictConfig) -> None:
     # 7. Save your results
     with open(os.path.join(save_path, "history.pkl"), "wb") as f_ptr:
         pickle.dump(history, f_ptr)
+
+    file_suffix: str = (
+    #    f"_{strategy_name}"
+        f"_C={cfg.num_clients}"
+        f"_B={cfg.batch_size}"
+        f"_E={cfg.num_epochs}"
+        f"_R={cfg.num_rounds}"
+        f"_lr={cfg.learning_rate}"
+    )
+
+    plot_metric_from_history(
+        history,
+        save_path,
+        (file_suffix),
+        metric_type='centralized',
+        regression=True if cfg.model.output_dim == 1 else False,
+    )
 
 
 if __name__ == "__main__":
