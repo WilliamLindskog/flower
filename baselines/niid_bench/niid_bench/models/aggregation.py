@@ -2,9 +2,12 @@ import torch
 import torch.nn as nn
 from torch.nn.parameter import Parameter
 from torch.optim import Optimizer
-from torch.optim import SGD
+from torch.optim import SGD, Adam
 from torch.utils.data import DataLoader
 from typing import List, Tuple
+import numpy as np
+
+from sklearn.metrics import r2_score
 
 class ScaffoldOptimizer(SGD):
     """Implements SGD optimizer step function as defined in the SCAFFOLD paper."""
@@ -99,6 +102,7 @@ def train_fedavg(
     learning_rate: float,
     momentum: float,
     weight_decay: float,
+    task: str,
 ) -> None:
     # pylint: disable=too-many-arguments
     """Train the network on the training set using FedAvg.
@@ -124,13 +128,19 @@ def train_fedavg(
     -------
     None
     """
-    criterion = nn.CrossEntropyLoss()
-    optimizer = SGD(
-        net.parameters(), lr=learning_rate, momentum=momentum, weight_decay=weight_decay
+
+    if task == "classification":
+        criterion = nn.CrossEntropyLoss()
+    elif task == "regression":
+        criterion = nn.MSELoss()
+    else:
+        raise ValueError("Task not supported")
+    optimizer = Adam(
+        net.parameters(), lr=learning_rate, weight_decay=weight_decay
     )
     net.train()
     for _ in range(epochs):
-        net = _train_one_epoch(net, trainloader, device, criterion, optimizer)
+        net = _train_one_epoch(net, trainloader, device, criterion, optimizer, task)
 
 
 def _train_one_epoch(
@@ -139,10 +149,13 @@ def _train_one_epoch(
     device: torch.device,
     criterion: nn.Module,
     optimizer: Optimizer,
+    task: str,
 ) -> nn.Module:
     """Train the network on the training set for one epoch."""
     for data, target in trainloader:
         data, target = data.to(device), target.to(device)
+        if task == "regression":
+            target = target.unsqueeze(1)
         optimizer.zero_grad()
         output = net(data)
         loss = criterion(output, target)
@@ -188,8 +201,8 @@ def train_fedprox(
     None
     """
     criterion = nn.CrossEntropyLoss()
-    optimizer = SGD(
-        net.parameters(), lr=learning_rate, momentum=momentum, weight_decay=weight_decay
+    optimizer = Adam(
+        net.parameters(), lr=learning_rate, weight_decay=weight_decay
     )
     global_params = [param.detach().clone() for param in net.parameters()]
     net.train()
@@ -259,8 +272,8 @@ def train_fednova(
         The a_i and g_i values.
     """
     criterion = nn.CrossEntropyLoss()
-    optimizer = SGD(
-        net.parameters(), lr=learning_rate, momentum=momentum, weight_decay=weight_decay
+    optimizer = Adam(
+        net.parameters(), lr=learning_rate, weight_decay=weight_decay
     )
     net.train()
     local_steps = 0
@@ -305,7 +318,8 @@ def _train_one_epoch_fednova(
 
 
 def test(
-    net: nn.Module, testloader: DataLoader, device: torch.device
+    net: nn.Module, testloader: DataLoader, device: torch.device, 
+    task: str = "classification", evaluate: bool = False
 ) -> Tuple[float, float]:
     """Evaluate the network on the test set.
 
@@ -323,17 +337,31 @@ def test(
     Tuple[float, float]
         The loss and accuracy of the network on the test set.
     """
-    criterion = nn.CrossEntropyLoss(reduction="sum")
+    if task == "classification":
+        criterion = nn.CrossEntropyLoss(reduction="sum")
+    elif task == "regression":
+        criterion = nn.MSELoss(reduction="sum")
+    else:
+        raise ValueError("Task not supported")
     net.eval()
     correct, total, loss = 0, 0, 0.0
     with torch.no_grad():
         for data, target in testloader:
             data, target = data.to(device), target.to(device)
+            if task == "regression":
+                target = target.unsqueeze(1)
             output = net(data)
             loss += criterion(output, target).item()
-            _, predicted = torch.max(output.data, 1)
+            if task == "classification":
+                _, predicted = torch.max(output.data, 1)
+                correct += (predicted == target).sum().item()
+            else:
+                predicted = output
             total += target.size(0)
-            correct += (predicted == target).sum().item()
     loss = loss / total
-    acc = correct / total
-    return loss, acc
+    if task == "classification":
+        acc = correct / total
+        return loss, acc
+    else:
+        r2 = r2_score(target.cpu().numpy(), predicted.cpu().numpy())
+        return loss, r2

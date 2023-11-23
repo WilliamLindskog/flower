@@ -10,11 +10,12 @@ from omegaconf import DictConfig
 from niid_bench.constants import NUM_FEATURES, NUM_CLASSES
 
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Tuple
 
 import matplotlib.pyplot as plt
 import numpy as np
 from flwr.server.history import History
+from torch.utils.data import DataLoader, Dataset
 
 def prepare_model_config(config: DictConfig) -> DictConfig:
     """Prepare the model configuration.
@@ -34,6 +35,7 @@ def prepare_model_config(config: DictConfig) -> DictConfig:
     config.model.input_dim = NUM_FEATURES[dataset_name]
     config.model.output_dim = NUM_CLASSES[dataset_name]
     config.model._target_ = _set_model_target(model_name)
+    config.task = _set_task(config.model.output_dim)
     
     return config
 
@@ -58,8 +60,30 @@ def _set_model_target(model_name: str) -> str:
         return 'niid_bench.models.mlp.MLP'
     elif model_name == 'resnet':
         return 'niid_bench.models.resnet.ResNet.make_baseline'
+    elif model_name == 'tabnet':
+        return 'niid_bench.models.tabnet.TabNet'
+    elif model_name == 'xgboost':
+        pass
     else:
         raise NotImplementedError(f"Model {model_name} not supported")
+
+def _set_task(output_dim: int) -> str:
+    """Set the task of the model.
+
+    Parameters
+    ----------
+    output_dim : int
+        The output dimension of the model
+
+    Returns
+    -------
+    str
+        The task of the model
+    """
+    if output_dim == 1:
+        return 'regression'
+    else:
+        return 'classification'
     
 def plot_metric_from_history(
     hist: History,
@@ -86,7 +110,7 @@ def plot_metric_from_history(
     )
 
     if regression:
-        _, values = zip(*metric_dict["loss"])
+        _, values = zip(*metric_dict["r2"])
         values = tuple(x.item() for x in values)
     else:
         _, values = zip(*metric_dict["accuracy"])
@@ -110,7 +134,7 @@ def plot_metric_from_history(
     axs[0].set_ylabel("Loss")
 
     if regression:
-        axs[1].set_ylabel("Loss")
+        axs[1].set_ylabel("R2")
     else:
         axs[1].set_ylabel("Accuracy")
 
@@ -120,3 +144,4 @@ def plot_metric_from_history(
 
     plt.savefig(Path(save_plot_path) / Path(f"{metric_type}_metrics{suffix}.png"))
     plt.close()
+

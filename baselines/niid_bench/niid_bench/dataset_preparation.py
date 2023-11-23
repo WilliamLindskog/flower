@@ -151,6 +151,10 @@ def _download_data(dataset_name="emnist", fraction=None) -> Tuple[Dataset, Datas
         data_path = FL_BENCH_ROOT / Path(PATHS[dataset_name])
 
         data = pd.read_csv(data_path)
+        #print(data.columns)
+        #print(len(data['region'].unique()))
+        #print(len(data['country'].unique()))
+        #quit()
 
         def standard_preprocessing(dataset: pd.DataFrame) -> pd.DataFrame:
             """Processing insurance dataset."""
@@ -160,7 +164,8 @@ def _download_data(dataset_name="emnist", fraction=None) -> Tuple[Dataset, Datas
                     print("Encoding categorical feature: ", col)
                     dataset[col] = dataset[col].astype('category').cat.codes
                     # Set to int64
-                    dataset[col] = dataset[col].astype('int64')
+                dataset[col] = dataset[col].astype('float64')
+
                     
             return dataset
         
@@ -172,9 +177,13 @@ def _download_data(dataset_name="emnist", fraction=None) -> Tuple[Dataset, Datas
             data.drop('slope', axis=1, inplace=True)
             data.drop('thal', axis=1, inplace=True)
             data.drop('ca', axis=1, inplace=True)
+        elif dataset_name == 'machine':
+            data.drop('Failure Type', axis=1, inplace=True)
+            data.drop('UDI', axis=1, inplace=True)
 
-        # remove rows that has ? in it
-        data = data.replace('?', np.nan)
+            # remove rows that has ? in it
+            data = data.replace('?', np.nan)
+        data = data.replace([np.inf, -np.inf], np.nan)
         data = data.dropna()
 
         # Standard preprocessing
@@ -523,6 +532,7 @@ class TabularDataset(Dataset):
             The name of the target column, by default "y"
         """
         self.df = df
+        self.y = df[target]
         self.target = target
 
     def __num_columns__(self) -> int:

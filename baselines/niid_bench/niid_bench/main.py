@@ -5,6 +5,7 @@ model is going to be evaluated, etc. At the end, this script saves the results.
 """
 import os
 import pickle
+from pathlib import Path
 
 import flwr as fl
 import hydra
@@ -18,7 +19,15 @@ from niid_bench.dataset import load_datasets
 from niid_bench.server_fednova import FedNovaServer
 from niid_bench.server_scaffold import ScaffoldServer, gen_evaluate_fn
 from niid_bench.strategy import FedNovaStrategy, ScaffoldStrategy
-from niid_bench.utils import prepare_model_config, plot_metric_from_history
+from niid_bench.utils import (
+    prepare_model_config, plot_metric_from_history
+)
+from niid_bench.models.xgboost import start_fedboost
+
+# ignore all warnings
+import warnings
+warnings.filterwarnings("ignore")
+warnings.simplefilter("ignore")
 
 
 @hydra.main(config_path="conf", config_name="fedavg_base", version_base=None)
@@ -41,8 +50,18 @@ def main(cfg: DictConfig) -> None:
         val_ratio=cfg.dataset.val_split,
         fraction=cfg.dataset.frac,
     )
-    if len(trainloaders[0].dataset[0][0]) != cfg.model.input_dim:
-        cfg.model.input_dim = len(trainloaders[0].dataset[0][0])
+    if cfg.model_name != "xgboost":
+        if len(trainloaders[0].dataset[0][0]) != cfg.model.input_dim:
+            cfg.model.input_dim = len(trainloaders[0].dataset[0][0])
+    else:
+        start_fedboost(
+            task_type=cfg.task,
+            trainloaders=trainloaders,
+            valloaders=valloaders,
+            testloader=testloader,
+            cfg = cfg,
+        )
+        quit()
 
     # 3. Define your clients
     client_fn = None
@@ -65,7 +84,6 @@ def main(cfg: DictConfig) -> None:
             valloaders,
             model=cfg.model,
         )
-
     device = cfg.server_device
     evaluate_fn = gen_evaluate_fn(testloader, device=device, model=cfg.model)
 

@@ -10,6 +10,7 @@ from torchmetrics import Accuracy, MeanSquaredError
 from tqdm import trange, tqdm
 from torchsummary import summary
 from torch.utils.data import DataLoader, Dataset, random_split
+from omegaconf import DictConfig, OmegaConf
 
 import flwr as fl
 from flwr.common.typing import Parameters
@@ -63,50 +64,42 @@ EvaluateResultsAndFailures = Tuple[
 ]
 
 
-def plot_xgbtree(tree: Union[XGBClassifier, XGBRegressor], n_tree: int) -> None:
-    """Visualize the built xgboost tree."""
-    xgb.plot_tree(tree, num_trees=n_tree)
-    plt.rcParams["figure.figsize"] = [50, 10]
-    plt.show()
-
-
 def construct_tree(
     dataset: Dataset, label: NDArray, n_estimators: int, tree_type: str
 ) -> Union[XGBClassifier, XGBRegressor]:
     """Construct a xgboost tree form tabular dataset."""
-    if tree_type == "BINARY":
-        tree = xgb.XGBClassifier(
-            objective="binary:logistic",
-            learning_rate=0.1,
-            max_depth=8,
-            n_estimators=n_estimators,
-            subsample=0.8,
-            colsample_bylevel=1,
-            colsample_bynode=1,
-            colsample_bytree=1,
-            alpha=5,
-            gamma=5,
-            num_parallel_tree=1,
-            min_child_weight=1,
-        )
-
-    elif tree_type == "MULTICLASS":
-        tree = xgb.XGBClassifier(
-            objective="multi:softmax",
-            learning_rate=0.1,
-            max_depth=8,
-            n_estimators=n_estimators,
-            subsample=0.8,
-            colsample_bylevel=1,
-            colsample_bynode=1,
-            colsample_bytree=1,
-            alpha=5,
-            gamma=5,
-            num_parallel_tree=1,
-            min_child_weight=1,
-        )
-
-    elif tree_type == "REG":
+    if tree_type == "classification":
+        if len(np.unique(label)) == 2:
+            tree = xgb.XGBClassifier(
+                objective="binary:logistic",
+                learning_rate=0.1,
+                max_depth=8,
+                n_estimators=n_estimators,
+                subsample=0.8,
+                colsample_bylevel=1,
+                colsample_bynode=1,
+                colsample_bytree=1,
+                alpha=5,
+                gamma=5,
+                num_parallel_tree=1,
+                min_child_weight=1,
+            )
+        else:
+            tree = xgb.XGBClassifier(
+                objective="multi:softmax",
+                learning_rate=0.1,
+                max_depth=8,
+                n_estimators=n_estimators,
+                subsample=0.8,
+                colsample_bylevel=1,
+                colsample_bynode=1,
+                colsample_bytree=1,
+                alpha=5,
+                gamma=5,
+                num_parallel_tree=1,
+                min_child_weight=1,
+            )
+    else:
         tree = xgb.XGBRegressor(
             objective="reg:squarederror",
             learning_rate=0.1,
@@ -219,31 +212,6 @@ class TreeDataset(Dataset):
         sample = {0: data, 1: label}
         return sample
 
-
-X_train = data_train[0].toarray()
-y_train = data_train[1]
-X_test = data_test[0].toarray()
-y_test = data_test[1]
-X_train.flags.writeable = True
-y_train.flags.writeable = True
-X_test.flags.writeable = True
-y_test.flags.writeable = True
-
-# If the feature dimensions of the trainset and testset do not agree,
-# specify n_features in the load_svmlight_file function in the above cell.
-# https://scikit-learn.org/stable/modules/generated/sklearn.datasets.load_svmlight_file.html
-print("Feature dimension of the dataset:", X_train.shape[1])
-print("Size of the trainset:", X_train.shape[0])
-print("Size of the testset:", X_test.shape[0])
-assert X_train.shape[1] == X_test.shape[1]
-
-if task_type == "BINARY":
-    y_train[y_train == -1] = 0
-    y_test[y_test == -1] = 0
-
-trainset = TreeDataset(np.array(X_train, copy=True), np.array(y_train, copy=True))
-testset = TreeDataset(np.array(X_test, copy=True), np.array(y_test, copy=True))
-
 def get_dataloader(
     dataset: Dataset, partition: str, batch_size: Union[int, str]
 ) -> DataLoader:
@@ -254,62 +222,14 @@ def get_dataloader(
     )
 
 
-# https://github.com/adap/flower
-def do_fl_partitioning(
-    trainset: Dataset,
-    testset: Dataset,
-    pool_size: int,
-    batch_size: Union[int, str],
-    val_ratio: float = 0.0,
-) -> Tuple[DataLoader, DataLoader, DataLoader]:
-    # Split training set into `num_clients` partitions to simulate different local datasets
-    partition_size = len(trainset) // pool_size
-    lengths = [partition_size] * pool_size
-    if sum(lengths) != len(trainset):
-        lengths[-1] = len(trainset) - sum(lengths[0:-1])
-    datasets = random_split(trainset, lengths, torch.Generator().manual_seed(0))
-
-    # Split each partition into train/val and create DataLoader
-    trainloaders = []
-    valloaders = []
-    for ds in datasets:
-        len_val = int(len(ds) * val_ratio)
-        len_train = len(ds) - len_val
-        lengths = [len_train, len_val]
-        ds_train, ds_val = random_split(ds, lengths, torch.Generator().manual_seed(0))
-        trainloaders.append(get_dataloader(ds_train, "train", batch_size))
-        if len_val != 0:
-            valloaders.append(get_dataloader(ds_val, "val", batch_size))
-        else:
-            valloaders = None
-    testloader = get_dataloader(testset, "test", batch_size)
-    return trainloaders, valloaders, testloader
-
-# The number of clients participated in the federated learning
-client_num = 5
-
-# The number of XGBoost trees in the tree ensemble that will be built for each client
-client_tree_num = 500 // client_num
-
-global_tree = construct_tree(X_train, y_train, client_tree_num, task_type)
-preds_train = global_tree.predict(X_train)
-preds_test = global_tree.predict(X_test)
-
-if task_type == "BINARY":
-    result_train = accuracy_score(y_train, preds_train)
-    result_test = accuracy_score(y_test, preds_test)
-    print("Global XGBoost Training Accuracy: %f" % (result_train))
-    print("Global XGBoost Testing Accuracy: %f" % (result_test))
-elif task_type == "REG":
-    result_train = mean_squared_error(y_train, preds_train)
-    result_test = mean_squared_error(y_test, preds_test)
-    print("Global XGBoost Training MSE: %f" % (result_train))
-    print("Global XGBoost Testing MSE: %f" % (result_test))
-
-print(global_tree)
-
 class CNN(nn.Module):
-    def __init__(self, n_channel: int = 64) -> None:
+    def __init__(
+            self, 
+            n_channel: int = 64, 
+            task_type: str = 'classification',
+            client_tree_num: int = 10,
+            client_num: int = 10,
+        ) -> None:
         super(CNN, self).__init__()
         n_out = 1
         self.task_type = task_type
@@ -332,9 +252,9 @@ class CNN(nn.Module):
         x = self.ReLU(self.conv1d(x))
         x = x.flatten(start_dim=1)
         x = self.ReLU(x)
-        if self.task_type == "BINARY":
+        if self.task_type == "classification":
             x = self.Sigmoid(self.layer_direct(x))
-        elif self.task_type == "REG":
+        elif self.task_type == "regression":
             x = self.Identity(self.layer_direct(x))
         return x
 
@@ -354,7 +274,6 @@ class CNN(nn.Module):
         state_dict = OrderedDict(layer_dict)
         self.load_state_dict(state_dict, strict=True)
 
-
 def train(
     task_type: str,
     net: CNN,
@@ -364,9 +283,9 @@ def train(
     log_progress: bool = True,
 ) -> Tuple[float, float, int]:
     # Define loss and optimizer
-    if task_type == "BINARY":
+    if task_type == "classification":
         criterion = nn.BCELoss()
-    elif task_type == "REG":
+    elif task_type == "regression":
         criterion = nn.MSELoss()
     # optimizer = torch.optim.SGD(net.parameters(), lr=0.001, momentum=0.9, weight_decay=1e-6)
     optimizer = torch.optim.Adam(net.parameters(), lr=0.0001, betas=(0.9, 0.999))
@@ -402,22 +321,22 @@ def train(
         total_loss += loss.item()
         n_samples += labels.size(0)
 
-        if task_type == "BINARY":
-            acc = Accuracy(task="binary")(outputs, labels.type(torch.int))
+        if task_type == "classification":
+            acc = Accuracy(task="binary").to(device)(outputs, labels.type(torch.int))
             total_result += acc * labels.size(0)
-        elif task_type == "REG":
-            mse = MeanSquaredError()(outputs, labels.type(torch.int))
+        elif task_type == "regression":
+            mse = MeanSquaredError().to(device)(outputs, labels.type(torch.int))
             total_result += mse * labels.size(0)
 
         if log_progress:
-            if task_type == "BINARY":
+            if task_type == "classification":
                 pbar.set_postfix(
                     {
                         "train_loss": total_loss / n_samples,
                         "train_acc": total_result / n_samples,
                     }
                 )
-            elif task_type == "REG":
+            elif task_type == "regression":
                 pbar.set_postfix(
                     {
                         "train_loss": total_loss / n_samples,
@@ -438,15 +357,15 @@ def test(
     log_progress: bool = True,
 ) -> Tuple[float, float, int]:
     """Evaluates the network on test data."""
-    if task_type == "BINARY":
+    if task_type == "classification":
         criterion = nn.BCELoss()
-    elif task_type == "REG":
+    elif task_type == "regression":
         criterion = nn.MSELoss()
 
     total_loss, total_result, n_samples = 0.0, 0.0, 0
     net.eval()
     with torch.no_grad():
-        pbar = tqdm(testloader, desc="TEST") if log_progress else testloader
+        pbar = testloader if not log_progress else tqdm(testloader, desc=f"TEST")
         for data in pbar:
             tree_outputs, labels = data[0].to(device), data[1].to(device)
             outputs = net(tree_outputs)
@@ -455,13 +374,12 @@ def test(
             total_loss += criterion(outputs, labels).item()
             n_samples += labels.size(0)
 
-            if task_type == "BINARY":
-                acc = Accuracy(task="binary")(
-                    outputs.cpu(), labels.type(torch.int).cpu()
-                )
+            if task_type == "classification":
+                # calculate accuracy with respect to device
+                acc = Accuracy(task="binary").to(device)(outputs.cpu(), labels.type(torch.int).cpu())
                 total_result += acc * labels.size(0)
-            elif task_type == "REG":
-                mse = MeanSquaredError()(outputs.cpu(), labels.type(torch.int).cpu())
+            elif task_type == "regression":
+                mse = MeanSquaredError().to(device)(outputs.cpu(), labels.type(torch.int).cpu())
                 total_result += mse * labels.size(0)
 
     if log_progress:
@@ -515,7 +433,11 @@ class FL_Client(fl.client.Client):
         self.log_progress = log_progress
 
         # instantiate model
-        self.net = CNN()
+        self.net = CNN(
+            task_type=self.task_type,
+            client_tree_num=self.client_tree_num,
+            client_num=self.client_num,
+            )
 
         # determine device
         self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
@@ -598,14 +520,14 @@ class FL_Client(fl.client.Client):
         )
 
         # Return training information: model, number of examples processed and metrics
-        if self.task_type == "BINARY":
+        if self.task_type == "classification":
             return FitRes(
                 status=Status(Code.OK, ""),
                 parameters=self.get_parameters(fit_params.config),
                 num_examples=num_examples,
                 metrics={"loss": train_loss, "accuracy": train_result},
             )
-        elif self.task_type == "REG":
+        elif self.task_type == "regression":
             return FitRes(
                 status=Status(Code.OK, ""),
                 parameters=self.get_parameters(fit_params.config),
@@ -628,7 +550,7 @@ class FL_Client(fl.client.Client):
         )
 
         # Return evaluation information
-        if self.task_type == "BINARY":
+        if self.task_type == "classification":
             print(
                 f"Client {self.cid}: evaluation on {num_examples} examples: loss={loss:.4f}, accuracy={result:.4f}"
             )
@@ -638,7 +560,7 @@ class FL_Client(fl.client.Client):
                 num_examples=num_examples,
                 metrics={"accuracy": result},
             )
-        elif self.task_type == "REG":
+        elif self.task_type == "regression":
             print(
                 f"Client {self.cid}: evaluation on {num_examples} examples: loss={loss:.4f}, mse={result:.4f}"
             )
@@ -882,11 +804,6 @@ class FL_Server(fl.server.Server):
         log(INFO, "Received initial parameters from one random client")
 
         return parameters
-    
-def print_model_layers(model: nn.Module) -> None:
-    print(model)
-    for param_tensor in model.state_dict():
-        print(param_tensor, "\t", model.state_dict()[param_tensor].size())
 
 
 def serverside_eval(
@@ -907,9 +824,13 @@ def serverside_eval(
     client_num: int,
 ) -> Tuple[float, Dict[str, float]]:
     """An evaluation function for centralized/serverside evaluation over the entire test set."""
-    # device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-    device = "cpu"
-    model = CNN()
+    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+
+    model = CNN(
+        task_type=task_type,
+        client_tree_num=client_tree_num,
+        client_num=client_num,
+    )
     # print_model_layers(model)
 
     model.set_weights(parameters_to_ndarrays(parameters[0]))
@@ -919,49 +840,36 @@ def serverside_eval(
     testloader = tree_encoding_loader(
         testloader, batch_size, trees_aggregated, client_tree_num, client_num
     )
+
+    print(f"Server-side evaluation on {len(testloader.dataset)} examples")
+
     loss, result, _ = test(
         task_type, model, testloader, device=device, log_progress=False
     )
 
-    if task_type == "BINARY":
+    if task_type == "classification":
         print(
             f"Evaluation on the server: test_loss={loss:.4f}, test_accuracy={result:.4f}"
         )
         return loss, {"accuracy": result}
-    elif task_type == "REG":
+    elif task_type == "regression":
         print(f"Evaluation on the server: test_loss={loss:.4f}, test_mse={result:.4f}")
         return loss, {"mse": result}
 
 
-def start_experiment(
+def start_fedboost(
     task_type: str,
-    trainset: Dataset,
-    testset: Dataset,
-    num_rounds: int = 5,
-    client_tree_num: int = 50,
-    client_pool_size: int = 5,
-    num_iterations: int = 100,
-    fraction_fit: float = 1.0,
-    min_fit_clients: int = 2,
-    batch_size: int = 32,
-    val_ratio: float = 0.1,
+    trainloaders: DataLoader,
+    valloaders: DataLoader,
+    testloader: DataLoader,
+    cfg: DictConfig,
 ) -> History:
-    client_resources = {"num_cpus": 0.5}  # 2 clients per CPU
-
-    # Partition the dataset into subsets reserved for each client.
-    # - 'val_ratio' controls the proportion of the (local) client reserved as a local test set
-    # (good for testing how the final model performs on the client's local unseen data)
-    trainloaders, valloaders, testloader = do_fl_partitioning(
-        trainset,
-        testset,
-        batch_size="whole",
-        pool_size=client_pool_size,
-        val_ratio=val_ratio,
-    )
-    print(
-        f"Data partitioned across {client_pool_size} clients"
-        f" and {val_ratio} of local dataset reserved for validation."
-    )
+    """Start a federated learning experiment using FedBoost."""
+    num_iterations = cfg.xgboost.num_iterations
+    batch_size = cfg.batch_size
+    min_fit_clients = client_pool_size = cfg.num_clients
+    client_tree_num = cfg.xgboost.client_tree_num
+    num_rounds = cfg.num_rounds
 
     # Configure the strategy
     def fit_config(server_round: int) -> Dict[str, Scalar]:
@@ -973,8 +881,8 @@ def start_experiment(
 
     # FedXgbNnAvg
     strategy = FedXgbNnAvg(
-        fraction_fit=fraction_fit,
-        fraction_evaluate=fraction_fit if val_ratio > 0.0 else 0.0,
+        fraction_fit=1.0,
+        fraction_evaluate=1.0,
         min_fit_clients=min_fit_clients,
         min_evaluate_clients=min_fit_clients,
         min_available_clients=client_pool_size,  # all clients should be available
@@ -986,7 +894,7 @@ def start_experiment(
             testloader=testloader,
             batch_size=batch_size,
             client_tree_num=client_tree_num,
-            client_num=client_num,
+            client_num=client_pool_size,
         ),
         accept_failures=False,
     )
@@ -995,31 +903,25 @@ def start_experiment(
         f"FL experiment configured for {num_rounds} rounds with {client_pool_size} client in the pool."
     )
     print(
-        f"FL round will proceed with {fraction_fit * 100}% of clients sampled, at least {min_fit_clients}."
+        f"FL round will proceed with 100% of clients sampled, at least {min_fit_clients}."
     )
 
     def client_fn(cid: str) -> fl.client.Client:
         """Creates a federated learning client"""
-        if val_ratio > 0.0 and val_ratio <= 1.0:
-            return FL_Client(
-                task_type,
-                trainloaders[int(cid)],
-                valloaders[int(cid)],
-                client_tree_num,
-                client_pool_size,
-                cid,
-                log_progress=False,
-            )
-        else:
-            return FL_Client(
-                task_type,
-                trainloaders[int(cid)],
-                None,
-                client_tree_num,
-                client_pool_size,
-                cid,
-                log_progress=False,
-            )
+        return FL_Client(
+            task_type,
+            trainloaders[int(cid)],
+            testloader,
+            client_tree_num,
+            client_pool_size,
+            cid,
+            log_progress=False,
+        )
+
+    client_resources = {
+        "num_cpus": cfg.client_resources.num_cpus,
+        "num_gpus": cfg.client_resources.num_gpus,
+    }
 
     # Start the simulation
     history = fl.simulation.start_simulation(
@@ -1034,17 +936,3 @@ def start_experiment(
     print(history)
 
     return history
-
-start_experiment(
-    task_type=task_type,
-    trainset=trainset,
-    testset=testset,
-    num_rounds=20,
-    client_tree_num=client_tree_num,
-    client_pool_size=client_num,
-    num_iterations=100,
-    batch_size=64,
-    fraction_fit=1.0,
-    min_fit_clients=1,
-    val_ratio=0.0,
-)

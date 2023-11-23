@@ -3,7 +3,8 @@
 import concurrent.futures
 from logging import DEBUG, INFO
 from typing import OrderedDict
-
+import os
+from pathlib import Path
 import torch
 from flwr.common import (
     Code,
@@ -33,12 +34,19 @@ from hydra.utils import instantiate
 from omegaconf import DictConfig
 from torch.utils.data import DataLoader
 
-from niid_bench.models import test
+from niid_bench.models.aggregation import test
+import numpy as np
+
+import warnings
+warnings.filterwarnings("ignore")
+warnings.simplefilter("ignore")
 
 FitResultsAndFailures = Tuple[
     List[Tuple[ClientProxy, FitRes]],
     List[Union[Tuple[ClientProxy, FitRes], BaseException]],
 ]
+
+from pytorch_tabnet.tab_model import TabNetClassifier, TabNetRegressor
 
 
 class ScaffoldServer(Server):
@@ -256,13 +264,17 @@ def gen_evaluate_fn(
     ) -> Optional[Tuple[float, Dict[str, Scalar]]]:
         # pylint: disable=unused-argument
         """Use the entire Emnist test set for evaluation."""
+        task = model.task
         net = instantiate(model)
         params_dict = zip(net.state_dict().keys(), parameters_ndarrays)
         state_dict = OrderedDict({k: torch.Tensor(v) for k, v in params_dict})
         net.load_state_dict(state_dict, strict=True)
         net.to(device)
-
-        loss, accuracy = test(net, testloader, device=device)
-        return loss, {"accuracy": accuracy}
+        
+        if task == "classification":
+            loss, accuracy = test(net, testloader, device=device, task=task, evaluate=True)
+            return loss, {"accuracy": accuracy}
+        loss, r2 = test(net, testloader, device=device, task=task, evaluate=True)
+        return loss, {"r2": r2}
 
     return evaluate

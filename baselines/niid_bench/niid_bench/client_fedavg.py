@@ -4,12 +4,23 @@ from typing import Callable, Dict, List, OrderedDict
 
 import flwr as fl
 import torch
+import os
+import pickle
 from flwr.common import Scalar
 from hydra.utils import instantiate
 from omegaconf import DictConfig
 from torch.utils.data import DataLoader
 
 from niid_bench.models.aggregation import test, train_fedavg
+from niid_bench.models.tabnet import TabNet
+import numpy as np
+from niid_bench.utils import untangle_dataloader, initialize_tabnet
+
+from pytorch_tabnet.tab_model import TabNetClassifier, TabNetRegressor
+from pathlib import Path
+import warnings
+warnings.filterwarnings("ignore")
+warnings.simplefilter("ignore")
 
 
 # pylint: disable=too-many-instance-attributes
@@ -27,6 +38,8 @@ class FlowerClientFedAvg(fl.client.NumPyClient):
         learning_rate: float,
         momentum: float,
         weight_decay: float,
+        task: str = "classification",
+        batch_size: int = 128,
     ) -> None:
         self.net = net
         self.trainloader = trainloader
@@ -36,6 +49,8 @@ class FlowerClientFedAvg(fl.client.NumPyClient):
         self.learning_rate = learning_rate
         self.momentum = momentum
         self.weight_decay = weight_decay
+        self.task = task
+        self.batch_size = batch_size
 
     def get_parameters(self, config: Dict[str, Scalar]):
         """Return the current local model parameters."""
@@ -58,15 +73,20 @@ class FlowerClientFedAvg(fl.client.NumPyClient):
             self.learning_rate,
             self.momentum,
             self.weight_decay,
+            self.task
         )
         final_p_np = self.get_parameters({})
-        return final_p_np, len(self.trainloader.dataset), {}
+        return final_p_np, len(self.trainloader), {}
 
     def evaluate(self, parameters, config: Dict[str, Scalar]):
         """Evaluate using given parameters."""
         self.set_parameters(parameters)
-        loss, acc = test(self.net, self.valloader, self.device)
-        return float(loss), len(self.valloader.dataset), {"accuracy": float(acc)}
+        if self.task == "classification":
+            loss, acc = test(self.net, self.valloader, self.device)
+            return float(loss), len(self.valloader.dataset), {"accuracy": float(acc)}
+        else:
+            loss, r2 = test(self.net, self.valloader, self.device, task=self.task)
+            return float(loss), len(self.valloader.dataset), {"r2": float(r2)}
 
 
 # pylint: disable=too-many-arguments
@@ -109,7 +129,12 @@ def gen_client_fn(
         """Create a Flower client representing a single organization."""
         # Load model
         device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-        net = instantiate(model).to(device)
+        if model._target_ == "niid_bench.models.tabnet.TabNet":
+            net = instantiate(model)
+        else:
+            net = instantiate(model).to(device)
+        task = model.task
+        batch_size = model.batch_size
 
         # Note: each client gets a different trainloader/valloader, so each client
         # will train and evaluate on their own unique data
@@ -125,6 +150,8 @@ def gen_client_fn(
             learning_rate,
             momentum,
             weight_decay,
+            task,
+            batch_size,
         )
 
     return client_fn
