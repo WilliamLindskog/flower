@@ -1,0 +1,9 @@
+num_clients: 3
+dataset:
+  name: imodels/credit-card
+  partition: linear
+  id_col: None
+model: null
+strategy:
+  _target_: null
+client: null
