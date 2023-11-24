@@ -8,12 +8,16 @@ model is going to be evaluated, etc. At the end, this script saves the results.
 import flwr as fl
 import hydra
 from omegaconf import DictConfig, OmegaConf
+from os.path import join
+import pickle
 
 from hydra.utils import call, instantiate
+from hydra.core.hydra_config import HydraConfig
 
 from treesXnets.dataset import load_data
 from treesXnets.server import gen_evaluate_fn
 from treesXnets.constants import TASKS
+from treesXnets.utils import plot_metric_from_history
 
 from flwr.server.server import Server
 from flwr.server.client_manager import SimpleClientManager
@@ -71,14 +75,27 @@ def main(cfg: DictConfig) -> None:
 
 
     # 6. Save your results
-    # Here you can save the `history` returned by the simulation and include
-    # also other buffers, statistics, info needed to be saved in order to later
-    # on generate the plots you provide in the README.md. You can for instance
-    # access elements that belong to the strategy for example:
-    # data = strategy.get_my_custom_data() -- assuming you have such method defined.
-    # Hydra will generate for you a directory each time you run the code. You
-    # can retrieve the path to that directory with this:
-    # save_path = HydraConfig.get().runtime.output_dir
+    save_path = HydraConfig.get().runtime.output_dir
+    print(save_path)
+    with open(join(save_path, "history.pkl"), "wb") as f_ptr:
+        pickle.dump(history, f_ptr)
+
+    file_suffix: str = (
+        f"_{cfg.strategy_name}"
+        f"_C={cfg.num_clients}"
+        f"_B={cfg.batch_size}"
+        f"_E={cfg.num_epochs}"
+        f"_R={cfg.num_rounds}"
+        f"_lr={cfg.learning_rate}"
+    )
+
+    plot_metric_from_history(
+        history,
+        save_path,
+        (file_suffix),
+        metric_type='centralized',
+        regression=True if cfg.model.output_dim == 1 else False,
+    )
 
 
 if __name__ == "__main__":

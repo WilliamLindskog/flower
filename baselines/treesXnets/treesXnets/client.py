@@ -4,7 +4,7 @@ Please overwrite `flwr.client.NumPyClient` or `flwr.client.Client` and create a 
 to instantiate your client.
 """
 
-from typing import Callable, Dict, OrderedDict, Tuple
+from typing import Callable, Dict, OrderedDict, Tuple, Union
 from torch.utils.data import DataLoader
 from omegaconf import DictConfig
 from hydra.utils import instantiate
@@ -15,9 +15,16 @@ from treesXnets.utils import test, TabularDataset, train
 from pandas import DataFrame
 from treesXnets.constants import TARGET
 
-from flwr.common import Scalar
+from flwr.common import (
+    Code, EvaluateIns, EvaluateRes, FitIns, FitRes,
+    GetParametersIns, GetParametersRes, Parameters, Status,
+)
 
-class FlowerClient(fl.client.NumPyClient):
+from flwr.common import Scalar
+from flwr.common.logger import log
+from utils import client_args_parser, BST_PARAMS
+
+class NetClient(fl.client.NumPyClient):
     """Flower client implementing FedAvg."""
 
     # pylint: disable=too-many-arguments
@@ -84,11 +91,93 @@ class FlowerClient(fl.client.NumPyClient):
         testloader = DataLoader(test_data, batch_size=self.batch_size, shuffle=False)
 
         return trainloader, testloader
+    
+
+# Define Flower client
+class XgbClient(fl.client.Client):
+    def __init__(self, **kwargs):
+        self.bst = None
+        self.config = None
+
+    def get_parameters(self, ins: GetParametersIns) -> GetParametersRes:
+        _ = (self, ins)
+        return GetParametersRes(
+            status=Status(code=Code.OK,message="OK",),
+            parameters=Parameters(tensor_type="", tensors=[]),
+        )
+
+    def _local_boost(self):
+        # Update trees based on local training data.
+        for i in range(self.num_epochs):
+            self.bst.update(train_dmatrix, self.bst.num_boosted_rounds())
+
+        # Extract the last N=num_local_round trees for sever aggregation
+        bst = self.bst[
+            self.bst.num_boosted_rounds()
+            - num_local_round : self.bst.num_boosted_rounds()
+        ]
+
+        return bst
+
+    def fit(self, ins: FitIns) -> FitRes:
+        if not self.bst:
+            # First round local training
+            log(INFO, "Start training at round 1")
+            bst = xgb.train(
+                params,
+                train_dmatrix,
+                num_boost_round=num_local_round,
+                evals=[(valid_dmatrix, "validate"), (train_dmatrix, "train")],
+            )
+            self.config = bst.save_config()
+            self.bst = bst
+        else:
+            for item in ins.parameters.tensors:
+                global_model = bytearray(item)
+
+            # Load global model into booster
+            self.bst.load_model(global_model)
+            self.bst.load_config(self.config)
+
+            bst = self._local_boost()
+
+        local_model = bst.save_raw("json")
+        local_model_bytes = bytes(local_model)
+
+        return FitRes(
+            status=Status(
+                code=Code.OK,
+                message="OK",
+            ),
+            parameters=Parameters(tensor_type="", tensors=[local_model_bytes]),
+            num_examples=num_train,
+            metrics={},
+        )
+
+    def evaluate(self, ins: EvaluateIns) -> EvaluateRes:
+        eval_results = self.bst.eval_set(
+            evals=[(valid_dmatrix, "valid")],
+            iteration=self.bst.num_boosted_rounds() - 1,
+        )
+        auc = round(float(eval_results.split("\t")[1].split(":")[1]), 4)
+
+        global_round = ins.config["global_round"]
+        log(INFO, f"AUC = {auc} at round {global_round}")
+
+        return EvaluateRes(
+            status=Status(
+                code=Code.OK,
+                message="OK",
+            ),
+            loss=0.0,
+            num_examples=num_val,
+            metrics={"AUC": auc},
+        )
 
 def gen_client_fn(
     fds: FederatedDataset,
     cfg: DictConfig,
-) -> Callable[[str], FlowerClient]:  # pylint: disable=too-many-arguments
+) -> Callable[[str], Union[NetClient, XgbClient]]:  # pylint: disable=too-many-arguments
     """Generate the client function that creates the FedAvg flower clients.
 
     Parameters
@@ -113,12 +202,15 @@ def gen_client_fn(
         The client function that creates the FedAvg flower clients
     """
 
-    def client_fn(cid: str) -> FlowerClient:
+    def client_fn(cid: str) -> Union[NetClient, XgbClient]:
         """Create a Flower client representing a single organization."""
         # Load model
         device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-        net = instantiate(cfg.model).to(device)
+        model = instantiate(cfg.model).to(device)
 
-        return FlowerClient(net, fds, device, cid, cfg.client)
+
+        if cfg.model_name != 'xgboost': 
+            return NetClient(model, fds, device, cid, cfg.client)
+        return XgbClient(model, fds, device, cid, cfg.client)
 
     return client_fn
