@@ -17,16 +17,19 @@ from flwr_datasets.partitioner import (
     NaturalIdPartitioner, SizePartitioner, LinearPartitioner,
     SquarePartitioner, ExponentialPartitioner
 )
+from treesXnets.constants import TARGET, TASKS
 
 from treesXnets.dataset_preparation import get_partitioner
 
-def load_data(cfg: DictConfig) -> FederatedDataset:
+def load_data(cfg: DictConfig, task: str) -> FederatedDataset:
     """Return the dataloaders for the dataset.
 
     Parameters
     ----------
     cfg : DictConfig
         An omegaconf object that stores the hydra config for the dataset.
+    task : str
+        The task type of the dataset.
 
     Returns
     -------
@@ -40,7 +43,16 @@ def load_data(cfg: DictConfig) -> FederatedDataset:
 
     fds = FederatedDataset(
         dataset = dataset_name,
-        partitioners = {"train" : partitioner(cfg.num_clients)},
+        partitioners = {
+            "train" : partitioner(cfg.num_clients)
+        },
     )
+
+    # Get number of input features and classes
+    cfg.num_input = len(fds.load_partition(0).features)-1
+    if task == "regression":
+        cfg.num_classes = 1
+    else: 
+        raise NotImplementedError
     
-    return fds
+    return fds, cfg

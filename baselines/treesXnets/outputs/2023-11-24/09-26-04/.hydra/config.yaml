@@ -1,0 +1,17 @@
+num_clients: 3
+batch_size: 64
+dataset:
+  name: imodels/credit-card
+  partition: linear
+  id_col: None
+  num_clients: ${num_clients}
+  val_frac: 0.0
+model:
+  _target_: treesXnets.models.mlp.MLP
+  size: small
+strategy:
+  _target_: null
+client_fn:
+  _target_: treesXnets.client.gen_client_fn
+client:
+  batch_size: 64

@@ -5,12 +5,19 @@ model is going to be evaluated, etc. At the end, this script saves the results.
 """
 # these are the basic packages you'll need here
 # feel free to remove some if aren't needed
+import flwr as fl
 import hydra
 from omegaconf import DictConfig, OmegaConf
 
 from hydra.utils import call, instantiate
 
 from treesXnets.dataset import load_data
+from treesXnets.server import gen_evaluate_fn
+from treesXnets.constants import TASKS
+
+from flwr.server.server import Server
+from flwr.server.client_manager import SimpleClientManager
+from flwr.server.strategy import FedAvg
 
 
 @hydra.main(config_path="conf", config_name="base", version_base=None)
@@ -26,22 +33,42 @@ def main(cfg: DictConfig) -> None:
     print(OmegaConf.to_yaml(cfg))
 
     # 2. Prepare your dataset
-    fds = load_data(cfg.dataset)
+    cfg.task = TASKS[cfg.dataset.name]
+    fds, cfg.dataset = load_data(cfg.dataset, cfg.task)
 
     # 3. Define your clients
-    client_fn = call(
-        cfg.client_fn,
-        fds=fds,
-        model=cfg.model
-    )
+    client_fn = call(cfg.client_fn, fds=fds, cfg=cfg)
 
     # 4. Define your strategy
-    # pass all relevant argument (including the global dataset used after aggregation,
-    # if needed by your method.)
-    # strategy = instantiate(cfg.strategy, <additional arguments if desired>)
+    device = cfg.device
+    evaluate_fn = gen_evaluate_fn(
+        cfg.dataset.name,
+        fds.load_full("test"), 
+        device, 
+        cfg.model
+    )
+    if cfg.strategy_name == 'fedavg':
+        cfg.strategy._target_ = "flwr.server.strategy.FedAvg"
+    else: 
+        raise NotImplementedError
+    strategy = instantiate(cfg.strategy, evaluate_fn=evaluate_fn)
+    server = Server(strategy=strategy, client_manager=SimpleClientManager()) 
 
     # 5. Start Simulation
-    # history = fl.simulation.start_simulation(<arguments for simulation>)
+    history = fl.simulation.start_simulation(
+        server=server,
+        client_fn=client_fn,
+        num_clients=cfg.num_clients,
+        config=fl.server.ServerConfig(num_rounds=cfg.num_rounds),
+        client_resources={
+            "num_cpus": cfg.client_resources.num_cpus,
+            "num_gpus": cfg.client_resources.num_gpus,
+        },
+        strategy=strategy,
+    )
+
+    print(history)
+
 
     # 6. Save your results
     # Here you can save the `history` returned by the simulation and include

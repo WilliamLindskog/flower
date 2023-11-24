@@ -4,7 +4,7 @@ Please overwrite `flwr.client.NumPyClient` or `flwr.client.Client` and create a 
 to instantiate your client.
 """
 
-from typing import Callable, Dict, OrderedDict
+from typing import Callable, Dict, OrderedDict, Tuple
 from torch.utils.data import DataLoader
 from omegaconf import DictConfig
 from hydra.utils import instantiate
@@ -21,26 +21,20 @@ class FlowerClient(fl.client.NumPyClient):
     def __init__(
         self,
         net: torch.nn.Module,
-        trainloader: DataLoader,
-        valloader: DataLoader,
+        fds: FederatedDataset,
         device: torch.device,
-        num_epochs: int,
-        learning_rate: float,
-        momentum: float,
-        weight_decay: float,
-        task: str = "classification",
-        batch_size: int = 128,
+        cid: str,
+        cfg: DictConfig,
     ) -> None:
         self.net = net
-        self.trainloader = trainloader
-        self.valloader = valloader
+        self.fds = fds
         self.device = device
-        self.num_epochs = num_epochs
-        self.learning_rate = learning_rate
-        self.momentum = momentum
-        self.weight_decay = weight_decay
-        self.task = task
-        self.batch_size = batch_size
+        self.cid = int(cid)
+        self.cfg = cfg
+        self.batch_size = cfg.batch_size
+
+        # Get dataloaders 
+        self.trainloader, self.testloader = self._load_data()
 
     def get_parameters(self, config: Dict[str, Scalar]):
         """Return the current local model parameters."""
@@ -77,25 +71,36 @@ class FlowerClient(fl.client.NumPyClient):
         else:
             loss, r2 = test(self.net, self.valloader, self.device, task=self.task)
             return float(loss), len(self.valloader.dataset), {"r2": float(r2)}
+        
+    def _load_data(self,) -> Tuple[DataLoader, DataLoader]:
+        """Return the dataloader for the client."""
+        # Get client partition
+        partition = self.fds.load_partition(self.cid)
+
+        # Divide partition into train and test
+        partition_train_test = partition.train_test_split(test_size=0.2)
+
+        trainloader = DataLoader(
+            partition_train_test["train"], batch_size=self.batch_size, shuffle=True
+        )
+        testloader = DataLoader(
+            partition_train_test["test"], batch_size=self.batch_size, shuffle=False
+        )
+
+        return trainloader, testloader
 
 def gen_client_fn(
     fds: FederatedDataset,
-    model: DictConfig,
-    num_epochs: int,
-    learning_rate: float,
-    momentum: float = 0.9,
-    weight_decay: float = 1e-5,
+    cfg: DictConfig,
 ) -> Callable[[str], FlowerClient]:  # pylint: disable=too-many-arguments
     """Generate the client function that creates the FedAvg flower clients.
 
     Parameters
     ----------
-    trainloaders: List[DataLoader]
-        A list of DataLoaders, each pointing to the dataset training partition
-        belonging to a particular client.
-    valloaders: List[DataLoader]
-        A list of DataLoaders, each pointing to the dataset validation partition
-        belonging to a particular client.
+    fds : FederatedDataset
+        The federated dataset object that contains the data, can be partitioned. 
+    cfg : DictConfig
+        An omegaconf object that stores the hydra config for the model.
     num_epochs : int
         The number of local epochs each client should run the training for before
         sending it to the server.
@@ -116,28 +121,8 @@ def gen_client_fn(
         """Create a Flower client representing a single organization."""
         # Load model
         device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-        if model._target_ == "niid_bench.models.tabnet.TabNet":
-            net = instantiate(model)
-        else:
-            net = instantiate(model).to(device)
-        task = model.task
-        batch_size = model.batch_size
+        net = instantiate(cfg.model).to(device)
 
-        # Note: each client gets a different trainloader/valloader, so each client
-        # will train and evaluate on their own unique data
-        trainloader = trainloaders[int(cid)]
-        valloader = valloaders[int(cid)]
-
-        return FlowerClient(
-            net,
-            fds,
-            device,
-            num_epochs,
-            learning_rate,
-            momentum,
-            weight_decay,
-            task,
-            batch_size,
-        )
+        return FlowerClient(net, fds, device, cid, cfg.client)
 
     return client_fn
