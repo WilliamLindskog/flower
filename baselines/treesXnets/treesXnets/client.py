@@ -11,6 +11,9 @@ from hydra.utils import instantiate
 from flwr_datasets import FederatedDataset
 import torch
 import flwr as fl
+from treesXnets.utils import test, TabularDataset, train
+from pandas import DataFrame
+from treesXnets.constants import TARGET
 
 from flwr.common import Scalar
 
@@ -32,6 +35,7 @@ class FlowerClient(fl.client.NumPyClient):
         self.cid = int(cid)
         self.cfg = cfg
         self.batch_size = cfg.batch_size
+        self.task = cfg.task
 
         # Get dataloaders 
         self.trainloader, self.testloader = self._load_data()
@@ -49,16 +53,7 @@ class FlowerClient(fl.client.NumPyClient):
     def fit(self, parameters, config: Dict[str, Scalar]):
         """Implement distributed fit function for a given client for FedAvg."""
         self.set_parameters(parameters)
-        train_fedavg(
-            self.net,
-            self.trainloader,
-            self.device,
-            self.num_epochs,
-            self.learning_rate,
-            self.momentum,
-            self.weight_decay,
-            self.task
-        )
+        train(self.net, self.trainloader, self.cfg)
         final_p_np = self.get_parameters({})
         return final_p_np, len(self.trainloader), {}
 
@@ -66,11 +61,11 @@ class FlowerClient(fl.client.NumPyClient):
         """Evaluate using given parameters."""
         self.set_parameters(parameters)
         if self.task == "classification":
-            loss, acc = test(self.net, self.valloader, self.device)
-            return float(loss), len(self.valloader.dataset), {"accuracy": float(acc)}
+            loss, acc = test(self.net, self.testloader, self.device)
+            return float(loss), len(self.testloader.dataset), {"accuracy": float(acc)}
         else:
-            loss, r2 = test(self.net, self.valloader, self.device, task=self.task)
-            return float(loss), len(self.valloader.dataset), {"r2": float(r2)}
+            loss, r2 = test(self.net, self.testloader, self.device, task=self.task)
+            return float(loss), len(self.testloader.dataset), {"r2": float(r2)}
         
     def _load_data(self,) -> Tuple[DataLoader, DataLoader]:
         """Return the dataloader for the client."""
@@ -79,13 +74,14 @@ class FlowerClient(fl.client.NumPyClient):
 
         # Divide partition into train and test
         partition_train_test = partition.train_test_split(test_size=0.2)
+        trainset, testset = partition_train_test["train"], partition_train_test["test"]
+        dataset_name = self.cfg.dataset_name
 
-        trainloader = DataLoader(
-            partition_train_test["train"], batch_size=self.batch_size, shuffle=True
-        )
-        testloader = DataLoader(
-            partition_train_test["test"], batch_size=self.batch_size, shuffle=False
-        )
+        train_data = TabularDataset(DataFrame(trainset), TARGET[dataset_name])
+        test_data = TabularDataset(DataFrame(testset), TARGET[dataset_name])
+
+        trainloader = DataLoader(train_data, batch_size=self.batch_size, shuffle=True)
+        testloader = DataLoader(test_data, batch_size=self.batch_size, shuffle=False)
 
         return trainloader, testloader
 

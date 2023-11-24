@@ -7,9 +7,11 @@ results, plotting.
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
-from typing import Tuple
+from typing import Tuple, Callable
 from sklearn.metrics import r2_score
 from pandas import DataFrame
+from omegaconf import DictConfig
+from torch.optim import Adam, Optimizer
 
 def test(
     net: nn.Module, 
@@ -63,6 +65,70 @@ def test(
         r2 = r2_score(target.cpu().numpy(), predicted.cpu().numpy())
         return loss, r2
     
+def train(
+    net: nn.Module,
+    trainloader: DataLoader,
+    cfg: DictConfig
+) -> None:
+    # pylint: disable=too-many-arguments
+    """Train the network on the training set.
+
+    Parameters
+    ----------
+    net : nn.Module
+        The neural network to train.
+    trainloader : DataLoader
+        The training set dataloader object.
+    cfg:
+        DictConfig with configuration parameters for training. 
+
+    Returns
+    -------
+    None
+    """
+    if cfg.strategy_name == 'fedavg':
+        # Get training parameters
+        criterion = _get_criterion(cfg.task)
+        lr, wd = cfg.lr, cfg.wd
+        optimizer = Adam(net.parameters(), lr=lr, weight_decay=wd)
+        # Train model
+        net.train()
+        for _ in range(cfg.num_epochs):
+            net = _train_one_epoch(net, trainloader, cfg.device, criterion, optimizer, cfg.task)
+    else:
+        raise NotImplementedError
+
+
+def _train_one_epoch(
+    net: nn.Module,
+    trainloader: DataLoader,
+    device: torch.device,
+    criterion: nn.Module,
+    optimizer: Optimizer,
+    task: str,
+) -> nn.Module:
+    """Train the network on the training set for one epoch."""
+    for data, target in trainloader:
+        data, target = data.to(device), target.to(device)
+        if task == "regression":
+            target = target.unsqueeze(1)
+        optimizer.zero_grad()
+        output = net(data)
+        loss = criterion(output, target)
+        loss.backward()
+        optimizer.step()
+    return net
+    
+def _get_criterion(task: str) -> Callable:
+    """ Get criterion/loss function for training. """
+    if task == "classification":
+        criterion = nn.CrossEntropyLoss()
+    elif task == "regression":
+        criterion = nn.MSELoss()
+    else:
+        raise ValueError("Task not supported")
+    return criterion
+
 class TabularDataset(torch.utils.data.Dataset):
     """Dataset for tabular data.
 
