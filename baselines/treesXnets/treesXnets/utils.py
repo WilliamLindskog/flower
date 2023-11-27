@@ -21,6 +21,8 @@ import numpy as np
 from torch import Tensor
 from types import ModuleType
 
+import os
+
 def test(
     net: nn.Module, 
     testloader: DataLoader, 
@@ -257,10 +259,11 @@ def plot_metric_from_history(
         if metric_type == "centralized"
         else hist.metrics_distributed
     )
+    print(metric_dict)
 
     if regression:
-        _, values = zip(*metric_dict["r2"])
-        values = tuple(x.item() for x in values)
+        _, values = zip(*metric_dict["RMSE"])
+        values = tuple(x for x in values)
     else:
         _, values = zip(*metric_dict["accuracy"])
 
@@ -283,7 +286,7 @@ def plot_metric_from_history(
     axs[0].set_ylabel("Loss")
 
     if regression:
-        axs[1].set_ylabel("R2")
+        axs[1].set_ylabel("RMSE")
     else:
         axs[1].set_ylabel("Accuracy")
 
@@ -293,3 +296,16 @@ def plot_metric_from_history(
 
     plt.savefig(Path(save_plot_path) / Path(f"{metric_type}_metrics{suffix}.png"))
     plt.close()
+
+def empty_dir(path: Path) -> None:
+    """Empty a directory.
+
+    Parameters
+    ----------
+    path : Path
+        The directory to empty.
+    """
+    for file in os.listdir(path):
+        file_path = os.path.join(path, file)
+        if os.path.isfile(file_path):
+            os.unlink(file_path)

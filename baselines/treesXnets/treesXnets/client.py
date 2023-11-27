@@ -14,6 +14,9 @@ import flwr as fl
 from treesXnets.utils import test, TabularDataset, train
 from pandas import DataFrame
 from treesXnets.constants import TARGET
+from logging import INFO
+from hydra.utils import instantiate
+
 
 from flwr.common import (
     Code, EvaluateIns, EvaluateRes, FitIns, FitRes,
@@ -22,7 +25,11 @@ from flwr.common import (
 
 from flwr.common import Scalar
 from flwr.common.logger import log
-from utils import client_args_parser, BST_PARAMS
+from treesXnets.tree_utils import BST_PARAMS
+import xgboost as xgb
+
+import warnings
+warnings.filterwarnings("ignore")
 
 class NetClient(fl.client.NumPyClient):
     """Flower client implementing FedAvg."""
@@ -95,9 +102,26 @@ class NetClient(fl.client.NumPyClient):
 
 # Define Flower client
 class XgbClient(fl.client.Client):
-    def __init__(self, **kwargs):
-        self.bst = None
+    def __init__(
+            self, 
+            fds: FederatedDataset, 
+            device: str, 
+            cid: str, 
+            cfg: DictConfig
+        ) -> None:
         self.config = None
+        self.fds = fds
+        self.device = device
+        self.cid = int(cid)
+        self.cfg = cfg
+        self.params = BST_PARAMS[cfg.dataset_name]
+        self.bst = None
+
+        # Load data
+        self.train_dmatrix, self.test_dmatrix = self._load_data()
+        self.num_train = self.train_dmatrix.num_row()
+        self.num_test = self.test_dmatrix.num_row()
+        self.num_local_round = self.cfg.num_local_round
 
     def get_parameters(self, ins: GetParametersIns) -> GetParametersRes:
         _ = (self, ins)
@@ -108,26 +132,25 @@ class XgbClient(fl.client.Client):
 
     def _local_boost(self):
         # Update trees based on local training data.
-        for i in range(self.num_epochs):
-            self.bst.update(train_dmatrix, self.bst.num_boosted_rounds())
+        for i in range(self.num_local_round):
+            self.bst.update(self.train_dmatrix, self.bst.num_boosted_rounds())
 
         # Extract the last N=num_local_round trees for sever aggregation
         bst = self.bst[
             self.bst.num_boosted_rounds()
-            - num_local_round : self.bst.num_boosted_rounds()
+            - self.num_local_round : self.bst.num_boosted_rounds()
         ]
 
         return bst
-
     def fit(self, ins: FitIns) -> FitRes:
         if not self.bst:
             # First round local training
             log(INFO, "Start training at round 1")
             bst = xgb.train(
-                params,
-                train_dmatrix,
-                num_boost_round=num_local_round,
-                evals=[(valid_dmatrix, "validate"), (train_dmatrix, "train")],
+                self.params,
+                self.train_dmatrix,
+                num_boost_round=self.num_local_round,
+                evals=[(self.test_dmatrix, "test"), (self.train_dmatrix, "train")],
             )
             self.config = bst.save_config()
             self.bst = bst
@@ -144,25 +167,37 @@ class XgbClient(fl.client.Client):
         local_model = bst.save_raw("json")
         local_model_bytes = bytes(local_model)
 
+        # Save model in tmp folder
+        bst.save_model(f"./treesXnets/tmp/{self.cid}.txt")
+
         return FitRes(
             status=Status(
                 code=Code.OK,
                 message="OK",
             ),
             parameters=Parameters(tensor_type="", tensors=[local_model_bytes]),
-            num_examples=num_train,
+            num_examples=self.num_train,
             metrics={},
         )
 
     def evaluate(self, ins: EvaluateIns) -> EvaluateRes:
+        # Load local model into booster
+        #self.bst = xgb.Booster(self.params)
+        #self.bst.load_model(f"./treesXnets/tmp/{self.cid}.txt")
+
         eval_results = self.bst.eval_set(
-            evals=[(valid_dmatrix, "valid")],
+            evals=[(self.test_dmatrix, "test")],
             iteration=self.bst.num_boosted_rounds() - 1,
         )
-        auc = round(float(eval_results.split("\t")[1].split(":")[1]), 4)
+
+        metric = round(float(eval_results.split("\t")[1].split(":")[1]), 4)
 
         global_round = ins.config["global_round"]
-        log(INFO, f"AUC = {auc} at round {global_round}")
+        if self.params["eval_metric"] == 'auc':
+            metric_name = "AUC"
+        elif self.params["eval_metric"] == 'rmse':
+            metric_name = "RMSE"
+        log(INFO, f"{metric_name} = {metric} at round {global_round}")
 
         return EvaluateRes(
             status=Status(
@@ -170,11 +205,32 @@ class XgbClient(fl.client.Client):
                 message="OK",
             ),
             loss=0.0,
-            num_examples=num_val,
-            metrics={"AUC": auc},
+            num_examples=self.num_test,
+            metrics={f"{metric_name}": metric},
         )
 
-def gen_client_fn(
+    def _load_data(self,) -> Tuple[DataLoader, DataLoader]:
+        """Return the dataloader for the client."""
+        # Get client partition
+        partition = self.fds.load_partition(self.cid, split="train")
+
+        # Divide partition into train and test
+        partition_train_test = partition.train_test_split(test_size=0.2)
+        trainset, testset = partition_train_test["train"], partition_train_test["test"]
+        dataset_name = self.cfg.dataset_name
+
+        # Set train and test data
+        train_data, test_data = DataFrame(trainset), DataFrame(testset)
+        X_train, y_train = train_data.drop(TARGET[dataset_name], axis=1), train_data[TARGET[dataset_name]]
+        X_test, y_test = test_data.drop(TARGET[dataset_name], axis=1), test_data[TARGET[dataset_name]]
+
+        # Set DMatrix
+        train_dmatrix = xgb.DMatrix(X_train, label=y_train)
+        valid_dmatrix = xgb.DMatrix(X_test, label=y_test)
+
+        return train_dmatrix, valid_dmatrix
+
+def get_client_fn(
     fds: FederatedDataset,
     cfg: DictConfig,
 ) -> Callable[[str], Union[NetClient, XgbClient]]:  # pylint: disable=too-many-arguments
@@ -206,11 +262,12 @@ def gen_client_fn(
         """Create a Flower client representing a single organization."""
         # Load model
         device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-        model = instantiate(cfg.model).to(device)
+        if cfg.model_name != 'xgboost': 
+            model = instantiate(cfg.model).to(device)
 
 
         if cfg.model_name != 'xgboost': 
             return NetClient(model, fds, device, cid, cfg.client)
-        return XgbClient(model, fds, device, cid, cfg.client)
+        return XgbClient(fds, device, cid, cfg.client)
 
     return client_fn
