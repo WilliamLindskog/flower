@@ -262,7 +262,7 @@ def plot_metric_from_history(
     print(metric_dict)
 
     if regression:
-        _, values = zip(*metric_dict["RMSE"])
+        _, values = zip(*metric_dict["rmse"])
         values = tuple(x for x in values)
     else:
         _, values = zip(*metric_dict["accuracy"])
@@ -274,12 +274,13 @@ def plot_metric_from_history(
     else:
         # let's extract decentralized loss (main metric reported in FedProx paper)
         rounds_loss, values_loss = zip(*hist.losses_distributed)
+        # make tuple of normal floats instead of tensors
 
 
     _, axs = plt.subplots(nrows=2, ncols=1, sharex="row")
     axs[0].plot(np.asarray(rounds_loss), np.asarray(values_loss))
     if metric_type == "centralized":
-        axs[1].plot(np.asarray(rounds_loss), np.asarray(values))    
+        axs[1].plot(np.asarray(rounds_loss[1:]), np.asarray(values))    
     else:
         axs[1].plot(np.asarray(rounds_loss), np.asarray(values))
 
@@ -309,3 +310,24 @@ def empty_dir(path: Path) -> None:
         file_path = os.path.join(path, file)
         if os.path.isfile(file_path):
             os.unlink(file_path)
+
+def modify_config(cfg: DictConfig) -> DictConfig:
+    """Modify the config file to add the correct paths."""
+    # Get model target
+    cfg.model._target_ = _get_model_target(cfg.model_name)
+    
+    return cfg
+
+def _get_model_target(model_name: str) -> str:
+    if model_name == "mlp":
+        return "treesXnets.models.MLP"
+    elif model_name == "cnn":
+        return "treesXnets.models.CNN"
+    elif model_name == "resnet":
+        return "treesXnets.models.ResNet"
+    elif model_name == "xgboost":
+        return "xgboost.Booster"
+    elif model_name == "glxgb":
+        return "treesXnets.models.CNN"
+    else:
+        raise ValueError("Unknown model name.")

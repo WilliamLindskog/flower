@@ -5,13 +5,15 @@ modifications) you might be better off instantiating your  model directly from t
 config. In this way, swapping your model for  another one can be done without changing
 the python code at all
 """
-
+import torch 
 import torch.nn as nn
 import torch.nn.functional as F
-from typing import List, Type
+from typing import List, Type, OrderedDict
 
 from torch import Tensor
 from types import ModuleType
+import flwr as fl
+import numpy as np
 
 from treesXnets.utils import _make_nn_module
 
@@ -206,3 +208,50 @@ class ResNet(nn.Module):
         x = self.blocks(x)
         x = self.head(x)
         return x
+    
+class CNN(nn.Module):
+    def __init__(self, **kwargs) -> None:
+        super(CNN, self).__init__()
+        n_out = kwargs["output_dim"]
+        self.task = kwargs["task"]
+        self.conv1d = nn.Conv1d(
+            1, kwargs["input_dim"], kernel_size=kwargs["client_tree_num"], 
+            stride=kwargs["client_tree_num"], padding=0
+        )
+        self.layer_direct = nn.Linear(kwargs["input_dim"] * kwargs["num_clients"], n_out)
+        self.ReLU = nn.ReLU()
+        self.Sigmoid = nn.Sigmoid()
+        self.Identity = nn.Identity()
+
+        # Add weight initialization
+        for layer in self.modules():
+            if isinstance(layer, nn.Linear):
+                nn.init.kaiming_uniform_(
+                    layer.weight, mode="fan_in", nonlinearity="relu"
+                )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.ReLU(self.conv1d(x))
+        x = x.flatten(start_dim=1)
+        x = self.ReLU(x)
+        if self.task == "classification":
+            x = self.Sigmoid(self.layer_direct(x))
+        elif self.task == "regression":
+            x = self.Identity(self.layer_direct(x))
+        return x
+
+    def get_weights(self) -> fl.common.NDArrays:
+        """Get model weights as a list of NumPy ndarrays."""
+        return [
+            np.array(val.cpu().numpy(), copy=True)
+            for _, val in self.state_dict().items()
+        ]
+
+    def set_weights(self, weights: fl.common.NDArrays) -> None:
+        """Set model weights from a list of NumPy ndarrays."""
+        layer_dict = {}
+        for k, v in zip(self.state_dict().keys(), weights):
+            if v.ndim != 0:
+                layer_dict[k] = torch.Tensor(np.array(v, copy=True))
+        state_dict = OrderedDict(layer_dict)
+        self.load_state_dict(state_dict, strict=True)

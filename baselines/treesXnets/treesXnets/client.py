@@ -4,7 +4,7 @@ Please overwrite `flwr.client.NumPyClient` or `flwr.client.Client` and create a 
 to instantiate your client.
 """
 
-from typing import Callable, Dict, OrderedDict, Tuple, Union
+from typing import Callable, Dict, OrderedDict, Tuple, Union, List
 from torch.utils.data import DataLoader
 from omegaconf import DictConfig
 from hydra.utils import instantiate
@@ -16,11 +16,18 @@ from pandas import DataFrame
 from treesXnets.constants import TARGET
 from logging import INFO
 from hydra.utils import instantiate
-
+from treesXnets.utils import test, TabularDataset, _train_one_epoch
+from treesXnets.models import CNN
+from treesXnets.tree_utils import (
+    tree_encoding_loader, TreeDataset, construct_tree_from_loader,
+    train_tree, test_tree
+)
+from xgboost import XGBClassifier, XGBRegressor
 
 from flwr.common import (
     Code, EvaluateIns, EvaluateRes, FitIns, FitRes,
-    GetParametersIns, GetParametersRes, Parameters, Status,
+    GetParametersIns, GetParametersRes, Parameters, Status, parameters_to_ndarrays,
+    ndarrays_to_parameters, GetPropertiesIns, GetPropertiesRes
 )
 
 from flwr.common import Scalar
@@ -229,6 +236,188 @@ class XgbClient(fl.client.Client):
         valid_dmatrix = xgb.DMatrix(X_test, label=y_test)
 
         return train_dmatrix, valid_dmatrix
+    
+class GLXGBClient(fl.client.Client):
+    def __init__(
+        self, 
+        net, 
+        fds: FederatedDataset, 
+        device: str, 
+        cid: str, 
+        cfg: DictConfig
+    ):
+        """
+        Creates a client for training `network.Net` on tabular dataset.
+        """
+        self.task = cfg.task
+        self.cid = cid
+        self.fds = fds
+        self.cfg = cfg
+        self.batch_size = cfg.batch_size
+        self.client_tree_num = cfg.client_tree_num
+        self.num_clients = cfg.num_clients
+        self.properties = {"tensor_type": "numpy.ndarray"}
+        self.log_progress = False
+
+        # instantiate model
+        self.net = net
+
+        # determine device
+        self.device = device
+
+        # load data
+        self.trainloader_original, self.testloader_original = self._load_data()
+        self.tree = construct_tree_from_loader(self.trainloader, self.client_tree_num, self.task)
+
+    def _load_data(self,) -> Tuple[DataLoader, DataLoader]:
+        """Return the dataloader for the client."""
+        # Get client partition
+        partition = self.fds.load_partition(self.cid)
+
+        # Divide partition into train and test
+        partition_train_test = partition.train_test_split(test_size=0.2)
+        trainset, testset = partition_train_test["train"], partition_train_test["test"]
+        dataset_name = self.cfg.dataset_name
+        train_set, test_set = DataFrame(trainset), DataFrame(testset)
+        X_train, y_train = train_set.drop(TARGET[dataset_name], axis=1), train_set[TARGET[dataset_name]]
+        X_test, y_test = test_set.drop(TARGET[dataset_name], axis=1), test_set[TARGET[dataset_name]]
+
+        train_data = TreeDataset(X_train.to_numpy(), y_train.to_numpy())
+        test_data = TreeDataset(X_test.to_numpy(), y_test.to_numpy())
+
+        trainloader = DataLoader(train_data, batch_size=self.batch_size, shuffle=True)
+        testloader = DataLoader(test_data, batch_size=self.batch_size, shuffle=False)
+
+        return trainloader, testloader
+
+    def get_properties(self, ins: GetPropertiesIns) -> GetPropertiesRes:
+        return GetPropertiesRes(properties=self.properties)
+
+    def get_parameters(
+        self, ins: GetParametersIns
+    ) -> Tuple[
+        GetParametersRes, Union[Tuple[XGBClassifier, int], Tuple[XGBRegressor, int]]
+    ]:
+        return [
+            GetParametersRes(
+                status=Status(Code.OK, ""),
+                parameters=ndarrays_to_parameters(self.net.get_weights()),
+            ),
+            (self.tree, int(self.cid)),
+        ]
+
+    def set_parameters(
+        self,
+        parameters: Tuple[
+            Parameters,
+            Union[
+                Tuple[XGBClassifier, int],
+                Tuple[XGBRegressor, int],
+                List[Union[Tuple[XGBClassifier, int], Tuple[XGBRegressor, int]]],
+            ],
+        ],
+    ) -> Union[
+        Tuple[XGBClassifier, int],
+        Tuple[XGBRegressor, int],
+        List[Union[Tuple[XGBClassifier, int], Tuple[XGBRegressor, int]]],
+    ]:
+        self.net.set_weights(parameters_to_ndarrays(parameters[0]))
+        return parameters[1]
+
+    def fit(self, fit_params: FitIns) -> FitRes:
+        # Process incoming request to train
+        num_iterations = self.cfg.num_local_round
+        batch_size = self.batch_size
+        aggregated_trees = self.set_parameters(fit_params.parameters)
+
+        if type(aggregated_trees) is list:
+            print("Client " + self.cid + ": recieved", len(aggregated_trees), "trees")
+        else:
+            print("Client " + self.cid + ": only had its own tree")
+        self.trainloader = tree_encoding_loader(
+            self.trainloader_original,
+            batch_size,
+            aggregated_trees,
+            self.client_tree_num,
+            self.client_num,
+        )
+        self.testloader = tree_encoding_loader(
+            self.testloader_original,
+            batch_size,
+            aggregated_trees,
+            self.client_tree_num,
+            self.client_num,
+        )
+
+        # num_iterations = None special behaviour: train(...) runs for a single epoch, however many updates it may be
+        num_iterations = num_iterations or len(self.trainloader)
+
+        # Train the model
+        print(f"Client {self.cid}: training for {num_iterations} iterations/updates")
+        self.net.to(self.device)
+        train_loss, train_result, num_examples = train_tree(
+            self.task_type,
+            self.net,
+            self.trainloader,
+            device=self.device,
+            num_iterations=num_iterations,
+            log_progress=self.log_progress,
+        )
+        print(
+            f"Client {self.cid}: training round complete, {num_examples} examples processed"
+        )
+
+        # Return training information: model, number of examples processed and metrics
+        if self.task == "classification":
+            return FitRes(
+                status=Status(Code.OK, ""),
+                parameters=self.get_parameters(fit_params.config),
+                num_examples=num_examples,
+                metrics={"loss": train_loss, "accuracy": train_result},
+            )
+        elif self.task == "regression":
+            return FitRes(
+                status=Status(Code.OK, ""),
+                parameters=self.get_parameters(fit_params.config),
+                num_examples=num_examples,
+                metrics={"loss": train_loss, "mse": train_result},
+            )
+
+    def evaluate(self, eval_params: EvaluateIns) -> EvaluateRes:
+        # Process incoming request to evaluate
+        self.set_parameters(eval_params.parameters)
+
+        # Evaluate the model
+        self.net.to(self.device)
+        loss, result, num_examples = test_tree(
+            self.task_type,
+            self.net,
+            self.valloader,
+            device=self.device,
+            log_progress=self.log_progress,
+        )
+
+        # Return evaluation information
+        if self.task_type == "classification":
+            print(
+                f"Client {self.cid}: evaluation on {num_examples} examples: loss={loss:.4f}, accuracy={result:.4f}"
+            )
+            return EvaluateRes(
+                status=Status(Code.OK, ""),
+                loss=loss,
+                num_examples=num_examples,
+                metrics={"accuracy": result},
+            )
+        elif self.task_type == "regression":
+            print(
+                f"Client {self.cid}: evaluation on {num_examples} examples: loss={loss:.4f}, mse={result:.4f}"
+            )
+            return EvaluateRes(
+                status=Status(Code.OK, ""),
+                loss=loss,
+                num_examples=num_examples,
+                metrics={"mse": result},
+            )
 
 def get_client_fn(
     fds: FederatedDataset,
@@ -242,20 +431,10 @@ def get_client_fn(
         The federated dataset object that contains the data, can be partitioned. 
     cfg : DictConfig
         An omegaconf object that stores the hydra config for the model.
-    num_epochs : int
-        The number of local epochs each client should run the training for before
-        sending it to the server.
-    learning_rate : float
-        The learning rate for the SGD  optimizer of clients.
-    momentum : float
-        The momentum for SGD optimizer of clients
-    weight_decay : float
-        The weight decay for SGD optimizer of clients
-
     Returns
     -------
-    Callable[[str], FlowerClientFedAvg]
-        The client function that creates the FedAvg flower clients
+    Callable[[str], FlowerClient]
+        The client function that creates the flower clients
     """
 
     def client_fn(cid: str) -> Union[NetClient, XgbClient]:
@@ -267,6 +446,8 @@ def get_client_fn(
 
 
         if cfg.model_name != 'xgboost': 
+            if cfg.model_name == 'cnn':
+                return GLXGBClient(model, fds, device, cid, cfg.client)
             return NetClient(model, fds, device, cid, cfg.client)
         return XgbClient(fds, device, cid, cfg.client)
 

@@ -8,11 +8,23 @@ from flwr_datasets.partitioner import (
     ExponentialPartitioner,
 )
 
-from typing import Union
+from typing import Union, Any, List, Tuple, Optional, Dict, OrderedDict
 import xgboost as xgb
+from xgboost import XGBClassifier, XGBRegressor
 
 from treesXnets.utils import TabularDataset
 from pandas import DataFrame
+
+from torch.utils.data import DataLoader
+import torch
+import numpy as np
+import matplotlib.pyplot as plt
+from flwr.common import NDArray
+import torch.nn as nn
+from torchmetrics import Accuracy, MeanSquaredError
+import flwr as fl
+from tqdm import tqdm
+from treesXnets.models import CNN
 
 
 BST_PARAMS = {
@@ -157,3 +169,302 @@ def resplit(dataset: DatasetDict) -> DatasetDict:
             ),
         }
     )
+
+def plot_xgbtree(tree: Union[XGBClassifier, XGBRegressor], n_tree: int) -> None:
+    """Visualize the built xgboost tree."""
+    xgb.plot_tree(tree, num_trees=n_tree)
+    plt.rcParams["figure.figsize"] = [50, 10]
+    plt.show()
+
+
+
+def get_dataloader(
+    dataset: Dataset, partition: str, batch_size: Union[int, str]
+) -> DataLoader:
+    if batch_size == "whole":
+        batch_size = len(dataset)
+    return DataLoader(
+        dataset, batch_size=batch_size, pin_memory=True, shuffle=(partition == "train")
+    )
+
+
+def construct_tree(
+    dataset: Dataset, label: NDArray, n_estimators: int, tree_type: str
+) -> Union[XGBClassifier, XGBRegressor]:
+    """Construct a xgboost tree form tabular dataset."""
+    if tree_type == "classification":
+        if np.unique(label).shape[0] == 2:
+            tree = xgb.XGBClassifier(
+                objective="binary:logistic",
+                learning_rate=0.1,
+                max_depth=8,
+                n_estimators=n_estimators,
+                subsample=0.8,
+                colsample_bylevel=1,
+                colsample_bynode=1,
+                colsample_bytree=1,
+                alpha=5,
+                gamma=5,
+                num_parallel_tree=1,
+                min_child_weight=1,
+            )
+        else:
+            tree = xgb.XGBClassifier(
+                objective="multi:softmax",
+                learning_rate=0.1,
+                max_depth=8,
+                n_estimators=n_estimators,
+                subsample=0.8,
+                colsample_bylevel=1,
+                colsample_bynode=1,
+                colsample_bytree=1,
+                alpha=5,
+                gamma=5,
+                num_parallel_tree=1,
+                min_child_weight=1,
+            )
+
+    elif tree_type == "regression":
+        tree = xgb.XGBRegressor(
+            objective="reg:squarederror",
+            learning_rate=0.1,
+            max_depth=8,
+            n_estimators=n_estimators,
+            subsample=0.8,
+            colsample_bylevel=1,
+            colsample_bynode=1,
+            colsample_bytree=1,
+            alpha=5,
+            gamma=5,
+            num_parallel_tree=1,
+            min_child_weight=1,
+        )
+
+    tree.fit(dataset, label)
+    return tree
+
+
+def construct_tree_from_loader(
+    dataset_loader: DataLoader, n_estimators: int, tree_type: str
+) -> Union[XGBClassifier, XGBRegressor]:
+    """Construct a xgboost tree form tabular dataset loader."""
+    for dataset in dataset_loader:
+        data, label = dataset[0], dataset[1]
+    return construct_tree(data, label, n_estimators, tree_type)
+
+
+def single_tree_prediction(
+    tree: Union[XGBClassifier, XGBRegressor], n_tree: int, dataset: NDArray
+) -> Optional[NDArray]:
+    """Extract the prediction result of a single tree in the xgboost tree
+    ensemble."""
+    # How to access a single tree
+    # https://github.com/bmreiniger/datascience.stackexchange/blob/master/57905.ipynb
+    num_t = len(tree.get_booster().get_dump())
+    if n_tree > num_t:
+        print(
+            "The tree index to be extracted is larger than the total number of trees."
+        )
+        return None
+
+    return tree.predict(  # type: ignore
+        dataset, iteration_range=(n_tree, n_tree + 1), output_margin=True
+    )
+
+
+def tree_encoding(  # pylint: disable=R0914
+    trainloader: DataLoader,
+    client_trees: Union[
+        Tuple[XGBClassifier, int],
+        Tuple[XGBRegressor, int],
+        List[Union[Tuple[XGBClassifier, int], Tuple[XGBRegressor, int]]],
+    ],
+    client_tree_num: int,
+    client_num: int,
+) -> Optional[Tuple[NDArray, NDArray]]:
+    """Transform the tabular dataset into prediction results using the
+    aggregated xgboost tree ensembles from all clients."""
+    if trainloader is None:
+        return None
+
+    for local_dataset in trainloader:
+        x_train, y_train = local_dataset[0], local_dataset[1]
+
+    x_train_enc = np.zeros((x_train.shape[0], client_num * client_tree_num))
+    x_train_enc = np.array(x_train_enc, copy=True)
+
+    temp_trees: Any = None
+    if isinstance(client_trees, list) is False:
+        temp_trees = [client_trees[0]] * client_num
+    elif isinstance(client_trees, list) and len(client_trees) != client_num:
+        temp_trees = [client_trees[0][0]] * client_num
+    else:
+        cids = []
+        temp_trees = []
+        for i, _ in enumerate(client_trees):
+            temp_trees.append(client_trees[i][0])  # type: ignore
+            cids.append(client_trees[i][1])  # type: ignore
+        sorted_index = np.argsort(np.asarray(cids))
+        temp_trees = np.asarray(temp_trees)[sorted_index]
+
+    for i, _ in enumerate(temp_trees):
+        for j in range(client_tree_num):
+            x_train_enc[:, i * client_tree_num + j] = single_tree_prediction(
+                temp_trees[i], j, x_train
+            )
+
+    x_train_enc32: Any = np.float32(x_train_enc)
+    y_train32: Any = np.float32(y_train)
+
+    x_train_enc32, y_train32 = torch.from_numpy(
+        np.expand_dims(x_train_enc32, axis=1)  # type: ignore
+    ), torch.from_numpy(
+        np.expand_dims(y_train32, axis=-1)  # type: ignore
+    )
+    return x_train_enc32, y_train32
+
+class TreeDataset(Dataset):
+    def __init__(self, data: NDArray, labels: NDArray) -> None:
+        self.labels = labels
+        self.data = data
+
+    def __len__(self) -> int:
+        return len(self.labels)
+
+    def __getitem__(self, idx: int) -> Dict[int, NDArray]:
+        label = self.labels[idx]
+        data = self.data[idx, :]
+        sample = {0: data, 1: label}
+        return sample
+
+def train_tree(
+    task_type: str,
+    net: CNN,
+    trainloader: DataLoader,
+    device: torch.device,
+    num_iterations: int,
+    log_progress: bool = True,
+) -> Tuple[float, float, int]:
+    # Define loss and optimizer
+    if task_type == "BINARY":
+        criterion = nn.BCELoss()
+    elif task_type == "REG":
+        criterion = nn.MSELoss()
+    # optimizer = torch.optim.SGD(net.parameters(), lr=0.001, momentum=0.9, weight_decay=1e-6)
+    optimizer = torch.optim.Adam(net.parameters(), lr=0.0001, betas=(0.9, 0.999))
+
+    def cycle(iterable):
+        """Repeats the contents of the train loader, in case it gets exhausted in 'num_iterations'."""
+        while True:
+            for x in iterable:
+                yield x
+
+    # Train the network
+    net.train()
+    total_loss, total_result, n_samples = 0.0, 0.0, 0
+    pbar = (
+        tqdm(iter(cycle(trainloader)), total=num_iterations, desc=f"TRAIN")
+        if log_progress
+        else iter(cycle(trainloader))
+    )
+
+    # Unusually, this training is formulated in terms of number of updates/iterations/batches processed
+    # by the network. This will be helpful later on, when partitioning the data across clients: resulting
+    # in differences between dataset sizes and hence inconsistent numbers of updates per 'epoch'.
+    for i, data in zip(range(num_iterations), pbar):
+        tree_outputs, labels = data[0].to(device), data[1].to(device)
+        optimizer.zero_grad()
+
+        outputs = net(tree_outputs)
+        loss = criterion(outputs, labels)
+        loss.backward()
+        optimizer.step()
+
+        # Collected training loss and accuracy statistics
+        total_loss += loss.item()
+        n_samples += labels.size(0)
+
+        if task_type == "classification":
+            acc = Accuracy(task="binary")(outputs, labels.type(torch.int))
+            total_result += acc * labels.size(0)
+        elif task_type == "regression":
+            mse = MeanSquaredError()(outputs, labels.type(torch.int))
+            total_result += mse * labels.size(0)
+
+        if log_progress:
+            if task_type == "classification":
+                pbar.set_postfix(
+                    {
+                        "train_loss": total_loss / n_samples,
+                        "train_acc": total_result / n_samples,
+                    }
+                )
+            elif task_type == "regression":
+                pbar.set_postfix(
+                    {
+                        "train_loss": total_loss / n_samples,
+                        "train_mse": total_result / n_samples,
+                    }
+                )
+    if log_progress:
+        print("\n")
+
+    return total_loss / n_samples, total_result / n_samples, n_samples
+
+
+def test_tree(
+    task_type: str,
+    net: CNN,
+    testloader: DataLoader,
+    device: torch.device,
+    log_progress: bool = True,
+) -> Tuple[float, float, int]:
+    """Evaluates the network on test data."""
+    if task_type == "BINARY":
+        criterion = nn.BCELoss()
+    elif task_type == "REG":
+        criterion = nn.MSELoss()
+
+    total_loss, total_result, n_samples = 0.0, 0.0, 0
+    net.eval()
+    with torch.no_grad():
+        pbar = tqdm(testloader, desc="TEST") if log_progress else testloader
+        for data in pbar:
+            tree_outputs, labels = data[0].to(device), data[1].to(device)
+            outputs = net(tree_outputs)
+
+            # Collected testing loss and accuracy statistics
+            total_loss += criterion(outputs, labels).item()
+            n_samples += labels.size(0)
+
+            if task_type == "classification":
+                acc = Accuracy(task="binary")(
+                    outputs.cpu(), labels.type(torch.int).cpu()
+                )
+                total_result += acc * labels.size(0)
+            elif task_type == "regression":
+                mse = MeanSquaredError()(outputs.cpu(), labels.type(torch.int).cpu())
+                total_result += mse * labels.size(0)
+
+    if log_progress:
+        print("\n")
+
+    return total_loss / n_samples, total_result / n_samples, n_samples
+
+def tree_encoding_loader(
+    dataloader: DataLoader,
+    batch_size: int,
+    client_trees: Union[
+        Tuple[XGBClassifier, int],
+        Tuple[XGBRegressor, int],
+        List[Union[Tuple[XGBClassifier, int], Tuple[XGBRegressor, int]]],
+    ],
+    client_tree_num: int,
+    client_num: int,
+) -> DataLoader:
+    encoding = tree_encoding(dataloader, client_trees, client_tree_num, client_num)
+    if encoding is None:
+        return None
+    data, labels = encoding
+    tree_dataset = TreeDataset(data, labels)
+    return get_dataloader(tree_dataset, "tree", batch_size)

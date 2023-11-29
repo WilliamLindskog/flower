@@ -10,19 +10,23 @@ import hydra
 from omegaconf import DictConfig, OmegaConf
 from os.path import join
 import pickle
+import functools
 
 from hydra.utils import call, instantiate
 from hydra.core.hydra_config import HydraConfig
 
 from treesXnets.dataset import load_data
-from treesXnets.server import get_evaluate_fn, eval_config, evaluate_metrics_aggregation
+from treesXnets.server import get_evaluate_fn, eval_config, evaluate_metrics_aggregation, FL_Server
 from treesXnets.constants import TASKS
-from treesXnets.utils import plot_metric_from_history, empty_dir
+from treesXnets.utils import plot_metric_from_history, empty_dir, modify_config
 
 from flwr.server.server import Server
 from flwr.server.client_manager import SimpleClientManager
-from flwr.server.strategy import FedAvg, FedXgbBagging
+from flwr.server.strategy import FedAvg, FedXgbBagging, FedXgbNnAvg
 from pathlib import Path
+
+from typing import Dict
+from flwr.common import Scalar
 
 
 @hydra.main(config_path="conf", config_name="base", version_base=None)
@@ -34,8 +38,9 @@ def main(cfg: DictConfig) -> None:
     cfg : DictConfig
         An omegaconf object that stores the hydra config.
     """
-    # 0. Empty tmp dir
+    # 0. Empty tmp dir and make appropriate changes to the config
     empty_dir(Path("./treesXnets/tmp"))
+    cfg = modify_config(cfg)
 
     # 1. Print parsed config
     print(OmegaConf.to_yaml(cfg))
@@ -61,9 +66,28 @@ def main(cfg: DictConfig) -> None:
         raise NotImplementedError
     if cfg.model_name != 'xgboost':
         strategy = instantiate(cfg.strategy, evaluate_fn=evaluate_fn)
+    elif cfg.model_name.lower() == 'glxgb':
+        # Configure the strategy
+        def fit_config(server_round: int) -> Dict[str, Scalar]:
+            print(f"Configuring round {server_round}")
+            return {
+                "num_iterations": cfg.num_local_rounds,
+                "batch_size": cfg.batch_size,
+            }
+        strategy = FedXgbNnAvg(
+            fraction_fit=1.0,
+            fraction_evaluate=1.0, 
+            min_fit_clients=cfg.num_clients,
+            min_evaluate_clients=cfg.num_clients,
+            min_available_clients=cfg.num_clients,  # all clients should be available
+            on_fit_config_fn=fit_config,
+            on_evaluate_config_fn=(lambda r: {"batch_size": cfg.batch_size}),
+            evaluate_fn=get_evaluate_fn(cfg.dataset.name, fds.load_full("test"), device, cfg.model),
+            accept_failures=False,
+        )
     else:
         strategy = FedXgbBagging(
-            evaluate_function=get_evaluate_fn(fds) if cfg.centralized_eval else None,
+            evaluate_function=get_evaluate_fn(cfg.dataset.name, fds.load_full("test"), device, cfg.model) if cfg.centralized_eval else None,
             fraction_fit=1.0,
             min_fit_clients=cfg.num_clients,
             min_available_clients=cfg.num_clients,
@@ -74,7 +98,10 @@ def main(cfg: DictConfig) -> None:
             if not cfg.centralized_eval
             else None,
         )
-    server = Server(strategy=strategy, client_manager=SimpleClientManager()) 
+    if cfg.model_name.lower() == 'glxgb':
+        server = FL_Server(client_manager=SimpleClientManager(), strategy=strategy)
+    else:
+        server = Server(strategy=strategy, client_manager=SimpleClientManager()) 
 
     # 5. Start Simulation
     history = fl.simulation.start_simulation(
