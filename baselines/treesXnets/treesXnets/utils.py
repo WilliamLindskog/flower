@@ -8,8 +8,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
-from typing import Tuple, Callable, Optional
-from sklearn.metrics import r2_score
+from typing import Tuple, Callable, Optional, OrderedDict
+from sklearn.metrics import r2_score, accuracy_score, mean_squared_error, f1_score, roc_auc_score
 from pandas import DataFrame
 from omegaconf import DictConfig
 from torch.optim import Adam, Optimizer
@@ -20,6 +20,8 @@ from matplotlib import pyplot as plt
 import numpy as np
 from torch import Tensor
 from types import ModuleType
+from torch.utils.data import DataLoader
+from treesXnets.constants import TARGET
 
 import os
 
@@ -46,34 +48,36 @@ def test(
     Tuple[float, float]
         The loss and accuracy of the network on the test set.
     """
-    if task == "classification":
-        criterion = nn.CrossEntropyLoss(reduction="sum")
-    elif task == "regression":
-        criterion = nn.MSELoss(reduction="sum")
-    else:
-        raise ValueError("Task not supported")
+    # Get critertion
+    criterion = _get_criterion(task=task)
+
     net.eval()
-    correct, total, loss = 0, 0, 0.0
+    loss = 0.0
     with torch.no_grad():
-        for data, target in testloader:
-            data, target = data.to(device), target.to(device)
-            if task == "regression":
-                target = target.unsqueeze(1)
-            output = net(data)
-            loss += criterion(output, target).item()
-            if task == "classification":
-                _, predicted = torch.max(output.data, 1)
-                correct += (predicted == target).sum().item()
-            else:
-                predicted = output
-            total += target.size(0)
-    loss = loss / total
-    if task == "classification":
-        acc = correct / total
-        return loss, acc
+        # since it's a test loop, out batch size is the whole test set
+        data, target = next(iter(testloader))
+        data, target = data.to(device), target.to(device)
+        target = target.unsqueeze(1) if task == "regression" else target.long()
+        output = net(data)
+        loss += criterion(output, target).item()
+        metrics = _get_scores(task, target, output)
+    return loss, metrics
+
+def _get_scores(task, target, output):
+    """ Get scores for regression or classification task. """
+    if task in ["multi", "binary"]:
+        output = F.softmax(output, dim=1).argmax(dim=1)
+        acc = accuracy_score(target.cpu().numpy(), output.cpu().numpy())
+        if task == "binary":
+            auc_score = roc_auc_score(target.cpu().numpy(), output.cpu().numpy())
+            metrics = {"accuracy": acc, "auc": auc_score}
+        else:
+            f1 = f1_score(target.cpu().numpy(), output.cpu().numpy(), average='weighted')
+            metrics = {"accuracy": acc, "f1": f1}
     else:
-        r2 = r2_score(target.cpu().numpy(), predicted.cpu().numpy())
-        return loss, r2
+        r2 = r2_score(target.cpu().numpy(), output.cpu().numpy())
+        metrics = {"r2": r2}
+    return metrics
     
 def train(
     net: nn.Module,
@@ -120,8 +124,7 @@ def _train_one_epoch(
     """Train the network on the training set for one epoch."""
     for data, target in trainloader:
         data, target = data.to(device), target.to(device)
-        if task == "regression":
-            target = target.unsqueeze(1)
+        target = target.unsqueeze(1) if task == "regression" else target.long()
         optimizer.zero_grad()
         output = net(data)
         loss = criterion(output, target)
@@ -131,7 +134,7 @@ def _train_one_epoch(
     
 def _get_criterion(task: str) -> Callable:
     """ Get criterion/loss function for training. """
-    if task == "classification":
+    if task in ["multi", "binary"]:
         criterion = nn.CrossEntropyLoss()
     elif task == "regression":
         criterion = nn.MSELoss()
@@ -236,6 +239,23 @@ class TabularDataset(torch.utils.data.Dataset):
     def __getitem__(self, idx):
         return self.data[idx], self.target[idx]
     
+def scale_data(dataframe: DataFrame, target: str, test: bool = False) -> DataFrame:
+    """Scale the data that is not the target column are are continuous. """
+
+    # Encode categorical columns
+    for col in dataframe.columns:
+        if dataframe[col].dtype == "object":
+            dataframe[col] = dataframe[col].astype("category")
+            dataframe[col] = dataframe[col].cat.codes
+
+    if not test:
+        for col in dataframe.columns:
+            if col != target and len(dataframe[col].unique()) > 50:
+                dataframe[col] = dataframe[col].astype("float32")
+                dataframe[col] = dataframe[col] / dataframe[col].max()
+
+    return dataframe
+    
 def plot_metric_from_history(
     hist: History,
     save_plot_path: Path,
@@ -280,7 +300,7 @@ def plot_metric_from_history(
     _, axs = plt.subplots(nrows=2, ncols=1, sharex="row")
     axs[0].plot(np.asarray(rounds_loss), np.asarray(values_loss))
     if metric_type == "centralized":
-        axs[1].plot(np.asarray(rounds_loss[1:]), np.asarray(values))    
+        axs[1].plot(np.asarray(rounds_loss), np.asarray(values))    
     else:
         axs[1].plot(np.asarray(rounds_loss), np.asarray(values))
 
@@ -315,7 +335,6 @@ def modify_config(cfg: DictConfig) -> DictConfig:
     """Modify the config file to add the correct paths."""
     # Get model target
     cfg.model._target_ = _get_model_target(cfg.model_name)
-    
     return cfg
 
 def _get_model_target(model_name: str) -> str:
@@ -331,3 +350,61 @@ def _get_model_target(model_name: str) -> str:
         return "treesXnets.models.CNN"
     else:
         raise ValueError("Unknown model name.")
+
+def update_model_state(model, parameters, device):
+    """ Update the model using the parameters."""
+    params_dict = zip(model.state_dict().keys(), parameters)
+    state_dict = OrderedDict({k: torch.Tensor(v) for k, v in params_dict})
+    model.load_state_dict(state_dict, strict=True)
+    return model.to(device)
+
+def partition_to_dataloader(
+        dataset, 
+        dataset_name: str, 
+        batch_size: int = 64, 
+        tag: str = "tabular", 
+        test: bool = False
+):
+    """ Convert a HuggingFace partition of dataset to a PyTorch DataLoader.
+    
+    Parameters
+    ----------
+    dataset : Dataset
+        The dataset to convert.
+    dataset_name : str
+        The name of the dataset.
+    batch_size : int
+        The batch size.
+    tag : str
+        The tag of the dataset.
+    test : bool
+        Whether the dataset is a test dataset.
+
+    """
+    if tag == "tabular":
+        return _partition_to_tabular(dataset, dataset_name, batch_size, test)
+    else:
+        raise ValueError(f"Unknown dataset tag {tag}.")
+
+def _partition_to_tabular(
+        dataset, 
+        dataset_name: str, 
+        batch_size: int = 64, 
+        test: bool = False
+    ):
+    """ Convert a HuggingFace partition of dataset to a PyTorch DataLoader.
+
+    Parameters
+    ----------
+    dataset : Dataset
+        The dataset to convert.
+    dataset_name : str
+        The name of the dataset.
+    batch_size : int
+        The batch size.
+    test : bool
+        Whether the dataset is a test dataset.
+    """
+    dataset = scale_data(dataset, TARGET[dataset_name], test)
+    dataset = TabularDataset(dataset, TARGET[dataset_name])
+    return DataLoader(dataset, batch_size=batch_size, shuffle=False)

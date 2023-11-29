@@ -29,7 +29,7 @@ from treesXnets.models import CNN
 
 BST_PARAMS = {
     "imodels/credit-card" : {
-        "objective": "reg:squarederror",
+        "objective": "binary:logistic",
         "eta": 0.01,  # Learning rate
         "max_depth": 6,
         "eval_metric": "rmse",

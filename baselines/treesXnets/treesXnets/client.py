@@ -16,13 +16,14 @@ from pandas import DataFrame
 from treesXnets.constants import TARGET
 from logging import INFO
 from hydra.utils import instantiate
-from treesXnets.utils import test, TabularDataset, _train_one_epoch
+from treesXnets.utils import test, TabularDataset, _train_one_epoch, scale_data
 from treesXnets.models import CNN
 from treesXnets.tree_utils import (
     tree_encoding_loader, TreeDataset, construct_tree_from_loader,
     train_tree, test_tree
 )
 from xgboost import XGBClassifier, XGBRegressor
+from sklearn.model_selection import train_test_split
 
 from flwr.common import (
     Code, EvaluateIns, EvaluateRes, FitIns, FitRes,
@@ -45,15 +46,17 @@ class NetClient(fl.client.NumPyClient):
     def __init__(
         self,
         net: torch.nn.Module,
-        fds: FederatedDataset,
+        df: DataFrame,
         device: torch.device,
         cid: str,
         cfg: DictConfig,
     ) -> None:
         self.net = net
-        self.fds = fds
         self.device = device
         self.cid = int(cid)
+        self.df = df[df.ID == self.cid]
+        print("------------------------------------------------")
+        print(f"Client {self.cid} has {len(self.df)} samples.")
         self.cfg = cfg
         self.batch_size = cfg.batch_size
         self.task = cfg.task
@@ -81,28 +84,23 @@ class NetClient(fl.client.NumPyClient):
     def evaluate(self, parameters, config: Dict[str, Scalar]):
         """Evaluate using given parameters."""
         self.set_parameters(parameters)
-        if self.task == "classification":
-            loss, acc = test(self.net, self.testloader, self.device)
-            return float(loss), len(self.testloader.dataset), {"accuracy": float(acc)}
-        else:
-            loss, r2 = test(self.net, self.testloader, self.device, task=self.task)
-            return float(loss), len(self.testloader.dataset), {"r2": float(r2)}
+        loss, metrics = test(self.net, self.testloader, device=self.device, task=self.task, evaluate=True)
+        return float(loss), len(self.testloader), metrics
         
     def _load_data(self,) -> Tuple[DataLoader, DataLoader]:
         """Return the dataloader for the client."""
-        # Get client partition
-        partition = self.fds.load_partition(self.cid)
-
-        # Divide partition into train and test
-        partition_train_test = partition.train_test_split(test_size=0.2)
-        trainset, testset = partition_train_test["train"], partition_train_test["test"]
+        self.df = self.df.drop(columns=['ID'])
         dataset_name = self.cfg.dataset_name
+        trainset, testset = train_test_split(self.df, test_size=0.2, random_state=42)
 
-        train_data = TabularDataset(DataFrame(trainset), TARGET[dataset_name])
-        test_data = TabularDataset(DataFrame(testset), TARGET[dataset_name])
+        # Scale data
+        trainset, testset = scale_data(trainset, TARGET[dataset_name]), scale_data(testset, TARGET[dataset_name])
+
+        train_data = TabularDataset(trainset, TARGET[dataset_name])
+        test_data = TabularDataset(testset, TARGET[dataset_name])
 
         trainloader = DataLoader(train_data, batch_size=self.batch_size, shuffle=True)
-        testloader = DataLoader(test_data, batch_size=self.batch_size, shuffle=False)
+        testloader = DataLoader(test_data, batch_size=len(testset), shuffle=False)
 
         return trainloader, testloader
     
@@ -111,7 +109,7 @@ class NetClient(fl.client.NumPyClient):
 class XgbClient(fl.client.Client):
     def __init__(
             self, 
-            fds: FederatedDataset, 
+            fds: DataFrame, 
             device: str, 
             cid: str, 
             cfg: DictConfig
@@ -241,7 +239,7 @@ class GLXGBClient(fl.client.Client):
     def __init__(
         self, 
         net, 
-        fds: FederatedDataset, 
+        fds: DataFrame, 
         device: str, 
         cid: str, 
         cfg: DictConfig
@@ -420,7 +418,7 @@ class GLXGBClient(fl.client.Client):
             )
 
 def get_client_fn(
-    fds: FederatedDataset,
+    df: DataFrame,
     cfg: DictConfig,
 ) -> Callable[[str], Union[NetClient, XgbClient]]:  # pylint: disable=too-many-arguments
     """Generate the client function that creates the FedAvg flower clients.
@@ -444,11 +442,10 @@ def get_client_fn(
         if cfg.model_name != 'xgboost': 
             model = instantiate(cfg.model).to(device)
 
-
         if cfg.model_name != 'xgboost': 
             if cfg.model_name == 'cnn':
-                return GLXGBClient(model, fds, device, cid, cfg.client)
-            return NetClient(model, fds, device, cid, cfg.client)
-        return XgbClient(fds, device, cid, cfg.client)
+                return GLXGBClient(model, df, device, cid, cfg.client)
+            return NetClient(model, df, device, cid, cfg.client)
+        return XgbClient(df, device, cid, cfg.client)
 
     return client_fn

@@ -3,29 +3,31 @@
 # Please follow the provided structure (this will ensuring all baseline follow
 # a similar configuration structure and hence be easy to customise)
 num_clients: 3
-num_rounds: 100
+num_rounds: 15
 num_epochs: 3
-batch_size: 64
+batch_size: 128
 device: cuda:0
 task: None
 strategy_name: fedavg
-learning_rate: 0.02
+learning_rate: 0.01
 weight_decay: 0.00
-model_name: mlp
+model_name: resnet
 centralized_eval: True
+seed: 42
 
 dataset:
-  name: imodels/credit-card
+  name: reg_cat_house_sales
   partition: linear
   id_col: None
   num_clients: ${num_clients}
   val_frac: 0.0
   num_input: 0
   num_classes: 0
+  test_frac: 0.2
 
 model:
   _target_: treesXnets.models.ResNet
-  model_size: small  # small, medium, large (check in model file for more info)
+  model_size: large  # small, medium, large (check in model file for more info)
   input_dim: ${dataset.num_input}
   output_dim: ${dataset.num_classes}
   task: ${task}
@@ -36,8 +38,15 @@ model:
 
 
 strategy:
-  _target_: # points to your strategy (either custom or exiting in Flower)
-  # rest of strategy config
+  _target_: flwr.server.strategy.fedavg
+  min_fit_clients: ${num_clients}
+  min_evaluate_clients: ${num_clients}
+  min_available_clients: ${num_clients}
+  fraction_fit: 1.0
+  fraction_evaluate: 1.0
+  evaluate_fn: None
+  on_evaluate_config_fn: 
+    _target_: treesXnets.strategy.get_evaluate_config
 
 client_fn:
   _target_: treesXnets.client.get_client_fn

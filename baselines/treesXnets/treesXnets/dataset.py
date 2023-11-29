@@ -11,14 +11,14 @@ defined here of course.
 
 from omegaconf import DictConfig
 from typing import Iterable, Tuple, List
+from pandas import DataFrame, concat
 
 from flwr_datasets import FederatedDataset
 from flwr_datasets.partitioner import (
     NaturalIdPartitioner, SizePartitioner, LinearPartitioner,
     SquarePartitioner, ExponentialPartitioner
 )
-from treesXnets.constants import TARGET, TASKS
-
+from treesXnets.constants import TARGET, TASKS, NUM_CLASSES
 from treesXnets.dataset_preparation import get_partitioner
 
 def load_data(cfg: DictConfig, task: str) -> FederatedDataset:
@@ -35,24 +35,26 @@ def load_data(cfg: DictConfig, task: str) -> FederatedDataset:
     -------
     Federated Dataset.
     """
-    # Get dataset name
+    # Get dataset name and partitioner
     dataset_name = cfg.name
-
-    # Get partitioner
     partitioner = get_partitioner(cfg.partition, cfg.id_col)
 
     fds = FederatedDataset(
-        dataset = dataset_name,
-        partitioners = {
-            "train" : partitioner(cfg.num_clients)
-        },
+        dataset = 'inria-soda/tabular-benchmark',
+        subset = dataset_name,
+        partitioners = {"train" : partitioner(cfg.num_clients)},
     )
 
+    df_list = []
+    for client_id in range(cfg.num_clients):
+        df = DataFrame(fds.load_partition(client_id))
+        df["ID"] = client_id
+        df_list.append(df)
+    df = DataFrame(concat(df_list, ignore_index=True))
+    print(df)
+    quit()
+
     # Get number of input features and classes
-    cfg.num_input = len(fds.load_partition(0).features)-1
-    if task == "regression":
-        cfg.num_classes = 1
-    else: 
-        raise NotImplementedError
-    
-    return fds, cfg
+    cfg.num_input = len(df.columns)-2
+    cfg.num_classes = NUM_CLASSES[dataset_name]
+    return df, cfg

@@ -9,6 +9,7 @@ from typing import Callable, Dict, Optional, Tuple, Union, List
 from omegaconf import DictConfig
 from hydra.utils import instantiate
 import timeit
+from treesXnets.utils import update_model_state
 
 import torch
 import xgboost as xgb
@@ -40,7 +41,7 @@ from flwr.common import (
 )
 from torch.utils.data import DataLoader
 from flwr_datasets import FederatedDataset
-from treesXnets.utils import test, TabularDataset
+from treesXnets.utils import test, TabularDataset, partition_to_dataloader
 from pandas import DataFrame
 from treesXnets.constants import TARGET, TASKS
 from treesXnets.models import CNN
@@ -316,10 +317,9 @@ class FL_Server(fl.server.Server):
         return parameters
 
 def get_evaluate_fn(
-    dataset_name: str,
     testdata: FederatedDataset,
     device: torch.device,
-    model: DictConfig,
+    cfg: DictConfig,
 ) -> Callable[
     [int, NDArrays, Dict[str, Scalar]], Optional[Tuple[float, Dict[str, Scalar]]]
 ]:
@@ -331,6 +331,8 @@ def get_evaluate_fn(
         The dataloader to test the model with.
     device : torch.device
         The device to test the model on.
+    cfg : DictConfig
+        The configuration.
 
     Returns
     -------
@@ -339,29 +341,26 @@ def get_evaluate_fn(
     The centralized evaluation function.
     """
 
-    if not model._target_ == "xgboost.Booster": 
+    # Get model configuration, model name and dataset name
+    model, model_name, dataset_name = cfg.model, cfg.model_name.lower(), cfg.dataset.name
+
+    # Get the test function
+    if model_name in ['mlp', 'resnet']: 
         def evaluate(
             server_round: int, parameters_ndarrays: NDArrays, config: Dict[str, Scalar]
         ) -> Optional[Tuple[float, Dict[str, Scalar]]]:
             # pylint: disable=unused-argument
             """Use the entire Emnist test set for evaluation."""
             net = instantiate(model)
-            params_dict = zip(net.state_dict().keys(), parameters_ndarrays)
-            state_dict = OrderedDict({k: torch.Tensor(v) for k, v in params_dict})
-            net.load_state_dict(state_dict, strict=True)
-            net.to(device)
+            net = update_model_state(net, parameters_ndarrays, device=device)
 
-            # Get dataloader
-            dataset = TabularDataset(DataFrame(testdata), TARGET[dataset_name])
-            testloader = DataLoader(dataset, batch_size=64, shuffle=False)
-
+            # Get dataloader and return scores
+            testloader = partition_to_dataloader(testdata, dataset_name, batch_size=len(testdata), test=True)
             task = TASKS[dataset_name]
-            if task == "classification":
-                loss, accuracy = test(net, testloader, device=device, task=task, evaluate=True)
-                return loss, {"accuracy": accuracy}
-            loss, r2 = test(net, testloader, device=device, task=task, evaluate=True)
-            return loss, {"r2": r2}
-    if model._target_ == "treesXnets.models.CNN":
+            loss, metrics = test(net, testloader, device=device, task=task, evaluate=True)
+            return loss, metrics
+        
+    elif model._target_ == "treesXnets.models.CNN":
         def evaluate(
             server_round: int,
             parameters: Tuple[
