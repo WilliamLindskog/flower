@@ -48,7 +48,7 @@ from treesXnets.models import CNN
 from hydra.utils import instantiate
 from treesXnets.tree_utils import (
     BST_PARAMS, tree_encoding_loader, TreeDataset,
-    accuracy, f1_metric, r2_metric, mae_metric
+    accuracy, f1_metric, r2_metric, mae_metric, test_tree
 )
 from treesXnets.constants import TARGET
 
@@ -384,17 +384,18 @@ def get_evaluate_fn(
             net.to(device)
 
             test_set = DataFrame(testdata)
-            X_test, y_test = test_set.drop(TARGET[dataset_name], axis=1), test_set[TARGET[dataset_name]]
-            test_data = TreeDataset(X_test.to_numpy(), y_test.to_numpy())
-            testloader = DataLoader(test_data, batch_size=model.batch_size, shuffle=False)
+            len_test_set = len(test_set)
+            test_data = TreeDataset(test_set, TARGET[dataset_name])
+            testloader = DataLoader(test_data, batch_size=len_test_set, shuffle=False)
 
             trees_aggregated = parameters[1]
             testloader = tree_encoding_loader(
                 testloader, model.batch_size, trees_aggregated, model.client_tree_num, 
                 model.num_clients
             )
-            loss, result, _ = test(
-                model.task, model, testloader, device=device, log_progress=False
+            loss, result, _ = test_tree(
+                model.task, net, testloader, device=device, 
+                log_progress=False, num_classes=cfg.dataset.num_classes
             )
 
             if model.task == "classification":
@@ -439,9 +440,6 @@ def get_evaluate_fn(
                     evals=[(testdata, "server_test")],
                     iteration=bst.num_boosted_rounds() - 1,
                 )
-
-                print(eval_results)
-                print("------------------------------------------------")
 
                 metric = round(float(eval_results.split("\t")[1].split(":")[1]), 4)
                 log(INFO, f"{metric_name} = {metric} at round {server_round}")

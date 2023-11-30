@@ -14,6 +14,7 @@ from xgboost import XGBClassifier, XGBRegressor
 
 from treesXnets.utils import TabularDataset
 from pandas import DataFrame
+from torch import tensor
 
 from torch.utils.data import DataLoader
 import torch
@@ -324,11 +325,15 @@ def tree_encoding(  # pylint: disable=R0914
     return x_train_enc32, y_train32
 
 class TreeDataset(Dataset):
-    def __init__(self, df: DataFrame, target: str):
-        self.df = df.drop(columns=[target]).values
-        self.df = torch.tensor(self.df, dtype=torch.float32)
-        self.target = df[target].values
-        self.target = torch.tensor(self.target, dtype=torch.float32)
+    def __init__(self, df, target: str, use_tensor: bool = False):
+        if use_tensor:
+            self.df = df
+            self.target = target
+        else:
+            self.df = df.drop(target, axis=1).values
+            self.df = torch.tensor(self.df, dtype=torch.float32)
+            self.target = df[target].values
+            self.target = torch.tensor(self.target, dtype=torch.float32)
 
     def __len__(self) -> int:
         return len(self.target)
@@ -376,7 +381,6 @@ def train_tree(
     for i, data in zip(range(num_iterations), pbar):
         tree_outputs, labels = data[0].to(device), data[1].to(device)
         optimizer.zero_grad()
-
         outputs = net(tree_outputs)
         loss = criterion(outputs, labels)
         loss.backward()
@@ -420,12 +424,15 @@ def test_tree(
     testloader: DataLoader,
     device: torch.device,
     log_progress: bool = True,
+    num_classes: Optional[int] = 2,
 ) -> Tuple[float, float, int]:
     """Evaluates the network on test data."""
-    if task_type == "BINARY":
-        criterion = nn.BCELoss()
-    elif task_type == "REG":
+    if num_classes is None:
+        raise ValueError("num_classes must be specified for classification tasks.")
+    elif num_classes == 1:
         criterion = nn.MSELoss()
+    else:
+        criterion = nn.CrossEntropyLoss()
 
     total_loss, total_result, n_samples = 0.0, 0.0, 0
     net.eval()
@@ -468,7 +475,7 @@ def tree_encoding_loader(
     if encoding is None:
         return None
     data, labels = encoding
-    tree_dataset = TreeDataset(data, labels)
+    tree_dataset = TreeDataset(data, labels, use_tensor=True)
     return get_dataloader(tree_dataset, "tree", batch_size)
 
 def accuracy(preds: np.ndarray, target: np.ndarray) -> float:

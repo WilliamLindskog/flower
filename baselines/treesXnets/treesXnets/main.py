@@ -103,8 +103,10 @@ def main(cfg: DictConfig) -> None:
         #        evaluate_fn=get_evaluate_fn(cfg.dataset.name, fds.load_full("test"), device, cfg.model),
         #        accept_failures=False,
         #    )
-
-        server = Server(strategy=strategy, client_manager=SimpleClientManager()) 
+        if cfg.model_name.lower() != 'glxgb':
+            server = Server(strategy=strategy, client_manager=SimpleClientManager()) 
+        else:
+            server = FL_Server(strategy=strategy, client_manager=SimpleClientManager())
 
         # 5. Start Simulation
         history = fl.simulation.start_simulation(

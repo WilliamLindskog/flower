@@ -13,6 +13,8 @@ def get_strategy(strategy_name: str) -> str:
         return "flwr.server.strategy.fedavg.FedAvg"
     elif strategy_name == "xgboost":
         return "flwr.server.strategy.fedxgb_bagging.FedXgbBagging"
+    elif strategy_name == "fedxgb_nn_avg":
+        return "flwr.server.strategy.fedxgb_nn_avg.FedXgbNnAvg"
     else: 
         raise ValueError("Unknown strategy name.")
     

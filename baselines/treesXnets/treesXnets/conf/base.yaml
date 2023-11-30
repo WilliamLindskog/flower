@@ -11,7 +11,7 @@ task: None
 strategy_name: fedavg
 lr: 0.01
 wd: 0.00
-model_name: xgboost
+model_name: glxgb
 centralized_eval: True
 seed: 42
 federated: True

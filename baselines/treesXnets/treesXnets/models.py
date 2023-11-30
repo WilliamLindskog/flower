@@ -210,15 +210,16 @@ class ResNet(nn.Module):
         return x
     
 class CNN(nn.Module):
-    def __init__(self, **kwargs) -> None:
+    def __init__(self, n_channel: int = 64, **kwargs) -> None:
         super(CNN, self).__init__()
         n_out = kwargs["output_dim"]
         self.task = kwargs["task"]
+        self.n_channel = kwargs["input_dim"]
         self.conv1d = nn.Conv1d(
-            1, kwargs["input_dim"], kernel_size=kwargs["client_tree_num"], 
+            1, self.n_channel, kernel_size=kwargs["client_tree_num"], 
             stride=kwargs["client_tree_num"], padding=0
         )
-        self.layer_direct = nn.Linear(kwargs["input_dim"] * kwargs["num_clients"], n_out)
+        self.layer_direct = nn.Linear(self.n_channel * kwargs["num_clients"], n_out)
         self.ReLU = nn.ReLU()
         self.Sigmoid = nn.Sigmoid()
         self.Identity = nn.Identity()
@@ -231,13 +232,18 @@ class CNN(nn.Module):
                 )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        print(x.shape)
         x = self.ReLU(self.conv1d(x))
+        print(x.shape)
         x = x.flatten(start_dim=1)
+        print(x.shape)
         x = self.ReLU(x)
+        print(x.shape)
         if self.task == "classification":
             x = self.Sigmoid(self.layer_direct(x))
         elif self.task == "regression":
-            x = self.Identity(self.layer_direct(x))
+            x = self.layer_direct(x)
+            x = self.Identity(x)
         return x
 
     def get_weights(self) -> fl.common.NDArrays:

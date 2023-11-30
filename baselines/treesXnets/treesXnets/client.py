@@ -203,7 +203,7 @@ class GLXGBClient(fl.client.Client):
     def __init__(
         self, 
         net, 
-        fds: DataFrame, 
+        df: DataFrame, 
         device: str, 
         cid: str, 
         cfg: DictConfig
@@ -211,9 +211,11 @@ class GLXGBClient(fl.client.Client):
         """
         Creates a client for training `network.Net` on tabular dataset.
         """
+
         self.task = cfg.task
-        self.cid = cid
-        self.fds = fds
+        self.cid = int(cid)
+        # get only the rows in dataframe that correspond to this client ID
+        self.df = df[df["ID"] == self.cid]
         self.cfg = cfg
         self.batch_size = cfg.batch_size
         self.client_tree_num = cfg.client_tree_num
@@ -228,30 +230,15 @@ class GLXGBClient(fl.client.Client):
         self.device = device
 
         # load data
-        self.trainloader_original, self.testloader_original = self._load_data()
-        self.tree = construct_tree_from_loader(self.trainloader, self.client_tree_num, self.task)
+        self.trainloader_original, self.testloader_original = _load_data(
+            self.df, 
+            cfg, 
+            cfg.batch_size, 
+            tag="tree"
+        )
+        self.tree = construct_tree_from_loader(self.trainloader_original, self.client_tree_num, self.task)
 
-    def _load_data(self,) -> Tuple[DataLoader, DataLoader]:
-        """Return the dataloader for the client."""
-        # Get client partition
-        partition = self.fds.load_partition(self.cid)
-
-        # Divide partition into train and test
-        partition_train_test = partition.train_test_split(test_size=0.2)
-        trainset, testset = partition_train_test["train"], partition_train_test["test"]
-        dataset_name = self.cfg.dataset_name
-        train_set, test_set = DataFrame(trainset), DataFrame(testset)
-        X_train, y_train = train_set.drop(TARGET[dataset_name], axis=1), train_set[TARGET[dataset_name]]
-        X_test, y_test = test_set.drop(TARGET[dataset_name], axis=1), test_set[TARGET[dataset_name]]
-
-        train_data = TreeDataset(X_train.to_numpy(), y_train.to_numpy())
-        test_data = TreeDataset(X_test.to_numpy(), y_test.to_numpy())
-
-        trainloader = DataLoader(train_data, batch_size=self.batch_size, shuffle=True)
-        testloader = DataLoader(test_data, batch_size=self.batch_size, shuffle=False)
-
-        return trainloader, testloader
-
+    
     def get_properties(self, ins: GetPropertiesIns) -> GetPropertiesRes:
         return GetPropertiesRes(properties=self.properties)
 
@@ -293,22 +280,22 @@ class GLXGBClient(fl.client.Client):
         aggregated_trees = self.set_parameters(fit_params.parameters)
 
         if type(aggregated_trees) is list:
-            print("Client " + self.cid + ": recieved", len(aggregated_trees), "trees")
+            print("Client " + str(self.cid) + ": recieved", len(aggregated_trees), "trees")
         else:
-            print("Client " + self.cid + ": only had its own tree")
+            print("Client " + str(self.cid) + ": only had its own tree")
         self.trainloader = tree_encoding_loader(
             self.trainloader_original,
             batch_size,
             aggregated_trees,
             self.client_tree_num,
-            self.client_num,
+            self.num_clients,
         )
         self.testloader = tree_encoding_loader(
             self.testloader_original,
             batch_size,
             aggregated_trees,
             self.client_tree_num,
-            self.client_num,
+            self.num_clients,
         )
 
         # num_iterations = None special behaviour: train(...) runs for a single epoch, however many updates it may be
@@ -318,7 +305,7 @@ class GLXGBClient(fl.client.Client):
         print(f"Client {self.cid}: training for {num_iterations} iterations/updates")
         self.net.to(self.device)
         train_loss, train_result, num_examples = train_tree(
-            self.task_type,
+            self.task,
             self.net,
             self.trainloader,
             device=self.device,
@@ -342,7 +329,7 @@ class GLXGBClient(fl.client.Client):
                 status=Status(Code.OK, ""),
                 parameters=self.get_parameters(fit_params.config),
                 num_examples=num_examples,
-                metrics={"loss": train_loss, "mse": train_result},
+                metrics={"loss": train_loss, "mae": train_result},
             )
 
     def evaluate(self, eval_params: EvaluateIns) -> EvaluateRes:
@@ -354,7 +341,7 @@ class GLXGBClient(fl.client.Client):
         loss, result, num_examples = test_tree(
             self.task_type,
             self.net,
-            self.valloader,
+            self.testloader,
             device=self.device,
             log_progress=self.log_progress,
         )
@@ -378,7 +365,7 @@ class GLXGBClient(fl.client.Client):
                 status=Status(Code.OK, ""),
                 loss=loss,
                 num_examples=num_examples,
-                metrics={"mse": result},
+                metrics={"mae": result},
             )
 
 def get_client_fn(
@@ -415,7 +402,7 @@ def get_client_fn(
 
 def _get_client_class(model_name: str) -> Callable:
     """Get the client class based on the model name."""
-    if model_name == "cnn":
+    if model_name in ["cnn", "glxgb"]:
         return GLXGBClient
     elif model_name == "xgboost":
         return XgbClient
