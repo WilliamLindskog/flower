@@ -143,8 +143,8 @@ def train_test_split(partition: Dataset, test_fraction: float, seed: int):
 
 def transform_dataset_to_dmatrix(data: DataFrame, target: str) -> xgb.core.DMatrix:
     """Transform dataset to DMatrix format for xgboost."""
-    x = data["inputs"]
-    y = data["label"]
+    x = data.drop(target, axis=1)
+    y = data[target]
     new_data = xgb.DMatrix(x, label=y)
     return new_data
 
@@ -324,16 +324,18 @@ def tree_encoding(  # pylint: disable=R0914
     return x_train_enc32, y_train32
 
 class TreeDataset(Dataset):
-    def __init__(self, data: NDArray, labels: NDArray) -> None:
-        self.labels = labels
-        self.data = data
+    def __init__(self, df: DataFrame, target: str):
+        self.df = df.drop(columns=[target]).values
+        self.df = torch.tensor(self.df, dtype=torch.float32)
+        self.target = df[target].values
+        self.target = torch.tensor(self.target, dtype=torch.float32)
 
     def __len__(self) -> int:
-        return len(self.labels)
+        return len(self.target)
 
-    def __getitem__(self, idx: int) -> Dict[int, NDArray]:
-        label = self.labels[idx]
-        data = self.data[idx, :]
+    def __getitem__(self, idx: int):
+        label = self.target[idx]
+        data = self.df[idx, :]
         sample = {0: data, 1: label}
         return sample
 
@@ -468,3 +470,26 @@ def tree_encoding_loader(
     data, labels = encoding
     tree_dataset = TreeDataset(data, labels)
     return get_dataloader(tree_dataset, "tree", batch_size)
+
+def accuracy(preds: np.ndarray, target: np.ndarray) -> float:
+    """Computes the accuracy for multiple binary predictions"""
+    return np.sum(preds == target) / len(preds)
+
+def r2_metric(preds: np.ndarray, target: np.ndarray) -> float:
+    """Computes the R2 score for multiple predictions"""
+    # calculate the r2 metric without using sklearn
+    ss_res = np.sum((target - preds) ** 2)
+    ss_tot = np.sum((target - np.mean(target)) ** 2)
+    return 1 - (ss_res / ss_tot)
+
+def f1_metric(preds: np.ndarray, target: np.ndarray) -> float:
+    """Computes the F1 score for multiple binary predictions"""
+    # calculate the f1 metric without using sklearn
+    tp = np.sum((preds == 1) & (target == 1))
+    fp = np.sum((preds == 1) & (target == 0))
+    fn = np.sum((preds == 0) & (target == 1))
+    return tp / (tp + 0.5 * (fp + fn))
+
+def mae_metric(preds: np.ndarray, target: np.ndarray) -> float:
+    """Computes the MAE score for multiple predictions"""
+    return np.mean(np.abs(preds - target))

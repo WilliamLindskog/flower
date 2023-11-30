@@ -46,7 +46,10 @@ from pandas import DataFrame
 from treesXnets.constants import TARGET, TASKS
 from treesXnets.models import CNN
 from hydra.utils import instantiate
-from treesXnets.tree_utils import BST_PARAMS, tree_encoding_loader, TreeDataset
+from treesXnets.tree_utils import (
+    BST_PARAMS, tree_encoding_loader, TreeDataset,
+    accuracy, f1_metric, r2_metric, mae_metric
+)
 from treesXnets.constants import TARGET
 
 FitResultsAndFailures = Tuple[
@@ -317,7 +320,7 @@ class FL_Server(fl.server.Server):
         return parameters
 
 def get_evaluate_fn(
-    testdata: FederatedDataset,
+    testdata: DataFrame,
     device: torch.device,
     cfg: DictConfig,
 ) -> Callable[
@@ -343,6 +346,7 @@ def get_evaluate_fn(
 
     # Get model configuration, model name and dataset name
     model, model_name, dataset_name = cfg.model, cfg.model_name.lower(), cfg.dataset.name
+    data = DataFrame(testdata)
 
     # Get the test function
     if model_name in ['mlp', 'resnet']: 
@@ -406,11 +410,18 @@ def get_evaluate_fn(
         def evaluate(
             server_round: int, parameters: Parameters, config: Dict[str, Scalar]
         ):
-            params = BST_PARAMS[dataset_name]
+            params = dict(cfg.xgboost)
+            data_use = data.copy()
             # If at the first round, skip the evaluation
             if server_round == 0:
                 return 0, {}
             else:
+                # Get metric name
+                if cfg.dataset.num_classes == 1:
+                    metric_name = 'mae'
+                else: 
+                    raise NotImplementedError
+                params["eval_metric"] = metric_name
                 bst = xgb.Booster(params=params)
                 for para in parameters.tensors:
                     para_b = bytearray(para)
@@ -419,32 +430,23 @@ def get_evaluate_fn(
                 bst.load_model(para_b)
 
                 # Get test data
-                dataset = DataFrame(testdata)
-                X_test = dataset.drop(columns=[TARGET[dataset_name]])
-                y_test = dataset[TARGET[dataset_name]]
-                test_data = xgb.DMatrix(X_test, label=y_test)
-
-                # Get metric name
-                print("Metric name is: ", params["eval_metric"])
-                print("---------------------------------------------------------")
-                if params["eval_metric"] == "auc":
-                    metric_name = "auc"
-                elif params["objective"] == "reg:squarederror":
-                    metric_name = "rmse"
-                else:
-                    raise NotImplementedError
+                X_test = data_use.drop(columns=[TARGET[dataset_name]])
+                y_test = data_use[TARGET[dataset_name]]
+                testdata = xgb.DMatrix(X_test, label=y_test)
 
                 # Run evaluation
                 eval_results = bst.eval_set(
-                    evals=[(test_data, "server_test")],
+                    evals=[(testdata, "server_test")],
                     iteration=bst.num_boosted_rounds() - 1,
                 )
+
+                print(eval_results)
+                print("------------------------------------------------")
 
                 metric = round(float(eval_results.split("\t")[1].split(":")[1]), 4)
                 log(INFO, f"{metric_name} = {metric} at round {server_round}")
 
                 # Get loss and metric
-                
 
                 return 0, {f"{metric_name}": metric}
 

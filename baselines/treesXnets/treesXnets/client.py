@@ -4,8 +4,8 @@ Please overwrite `flwr.client.NumPyClient` or `flwr.client.Client` and create a 
 to instantiate your client.
 """
 
-from typing import Callable, Dict, OrderedDict, Tuple, Union, List
-from torch.utils.data import DataLoader
+from typing import Callable, Dict, OrderedDict, Tuple, Union, List, Type
+from torch.utils.data import DataLoader, Dataset
 from omegaconf import DictConfig
 from hydra.utils import instantiate
 from flwr_datasets import FederatedDataset
@@ -20,8 +20,9 @@ from treesXnets.utils import test, TabularDataset, _train_one_epoch, scale_data
 from treesXnets.models import CNN
 from treesXnets.tree_utils import (
     tree_encoding_loader, TreeDataset, construct_tree_from_loader,
-    train_tree, test_tree
+    train_tree, test_tree, mae_metric, r2_metric, f1_metric, accuracy, transform_dataset_to_dmatrix
 )
+import numpy as np
 from xgboost import XGBClassifier, XGBRegressor
 from sklearn.model_selection import train_test_split
 
@@ -35,6 +36,7 @@ from flwr.common import Scalar
 from flwr.common.logger import log
 from treesXnets.tree_utils import BST_PARAMS
 import xgboost as xgb
+from sklearn.metrics import mean_absolute_error, r2_score, f1_score, accuracy_score
 
 import warnings
 warnings.filterwarnings("ignore")
@@ -55,14 +57,12 @@ class NetClient(fl.client.NumPyClient):
         self.device = device
         self.cid = int(cid)
         self.df = df[df.ID == self.cid]
-        print("------------------------------------------------")
-        print(f"Client {self.cid} has {len(self.df)} samples.")
         self.cfg = cfg
         self.batch_size = cfg.batch_size
         self.task = cfg.task
 
         # Get dataloaders 
-        self.trainloader, self.testloader = self._load_data()
+        self.trainloader, self.testloader = _load_data(self.df, cfg, self.batch_size,)
 
     def get_parameters(self, config: Dict[str, Scalar]):
         """Return the current local model parameters."""
@@ -86,47 +86,39 @@ class NetClient(fl.client.NumPyClient):
         self.set_parameters(parameters)
         loss, metrics = test(self.net, self.testloader, device=self.device, task=self.task, evaluate=True)
         return float(loss), len(self.testloader), metrics
-        
-    def _load_data(self,) -> Tuple[DataLoader, DataLoader]:
-        """Return the dataloader for the client."""
-        self.df = self.df.drop(columns=['ID'])
-        dataset_name = self.cfg.dataset_name
-        trainset, testset = train_test_split(self.df, test_size=0.2, random_state=42)
-
-        # Scale data
-        trainset, testset = scale_data(trainset, TARGET[dataset_name]), scale_data(testset, TARGET[dataset_name])
-
-        train_data = TabularDataset(trainset, TARGET[dataset_name])
-        test_data = TabularDataset(testset, TARGET[dataset_name])
-
-        trainloader = DataLoader(train_data, batch_size=self.batch_size, shuffle=True)
-        testloader = DataLoader(test_data, batch_size=len(testset), shuffle=False)
-
-        return trainloader, testloader
-    
 
 # Define Flower client
 class XgbClient(fl.client.Client):
     def __init__(
             self, 
-            fds: DataFrame, 
+            model,
+            df: DataFrame, 
             device: str, 
             cid: str, 
-            cfg: DictConfig
+            cfg: DictConfig,
         ) -> None:
         self.config = None
-        self.fds = fds
-        self.device = device
+        self.model = model
         self.cid = int(cid)
+        self.df = df[df["ID"] == self.cid]
+        self.device = device
         self.cfg = cfg
-        self.params = BST_PARAMS[cfg.dataset_name]
+        self.params = dict(cfg.xgboost)
         self.bst = None
 
         # Load data
-        self.train_dmatrix, self.test_dmatrix = self._load_data()
+        self.train_dmatrix, self.test_dmatrix = _load_data(self.df, cfg, cfg.batch_size, tag="dmatrix")
         self.num_train = self.train_dmatrix.num_row()
         self.num_test = self.test_dmatrix.num_row()
         self.num_local_round = self.cfg.num_local_round
+
+        if cfg.num_classes == 1:
+            self.params["objective"] = "reg:squarederror"
+        elif cfg.num_classes == 2:
+            self.params["objective"] = "binary:logistic"
+        else:
+            self.params["objective"] = "multi:softmax"
+
 
     def get_parameters(self, ins: GetParametersIns) -> GetParametersRes:
         _ = (self, ins)
@@ -151,11 +143,20 @@ class XgbClient(fl.client.Client):
         if not self.bst:
             # First round local training
             log(INFO, "Start training at round 1")
+            if self.cfg.num_classes == 1:
+                self.params["eval_metric"] = 'mae'# [mae_metric, r2_metric]
+                self.metric_name = "mae"
+            elif self.cfg.num_classes == 2:
+                self.params["eval_metric"] = 'error'
+                self.metric_name = "error"
+            else:
+                self.params["eval_metric"] = 'merror'
+                self.metric_name = "merror"
             bst = xgb.train(
                 self.params,
                 self.train_dmatrix,
                 num_boost_round=self.num_local_round,
-                evals=[(self.test_dmatrix, "test"), (self.train_dmatrix, "train")],
+                evals=[(self.train_dmatrix, "train"), (self.test_dmatrix, "test")],
             )
             self.config = bst.save_config()
             self.bst = bst
@@ -172,24 +173,14 @@ class XgbClient(fl.client.Client):
         local_model = bst.save_raw("json")
         local_model_bytes = bytes(local_model)
 
-        # Save model in tmp folder
-        bst.save_model(f"./treesXnets/tmp/{self.cid}.txt")
-
         return FitRes(
-            status=Status(
-                code=Code.OK,
-                message="OK",
-            ),
+            status=Status(code=Code.OK,message="OK",),
             parameters=Parameters(tensor_type="", tensors=[local_model_bytes]),
             num_examples=self.num_train,
             metrics={},
         )
 
     def evaluate(self, ins: EvaluateIns) -> EvaluateRes:
-        # Load local model into booster
-        #self.bst = xgb.Booster(self.params)
-        #self.bst.load_model(f"./treesXnets/tmp/{self.cid}.txt")
-
         eval_results = self.bst.eval_set(
             evals=[(self.test_dmatrix, "test")],
             iteration=self.bst.num_boosted_rounds() - 1,
@@ -198,42 +189,15 @@ class XgbClient(fl.client.Client):
         metric = round(float(eval_results.split("\t")[1].split(":")[1]), 4)
 
         global_round = ins.config["global_round"]
-        if self.params["eval_metric"] == 'auc':
-            metric_name = "AUC"
-        elif self.params["eval_metric"] == 'rmse':
-            metric_name = "RMSE"
-        log(INFO, f"{metric_name} = {metric} at round {global_round}")
+        log(INFO, f"{self.metric_name} = {metric} at round {global_round}")
 
         return EvaluateRes(
-            status=Status(
-                code=Code.OK,
-                message="OK",
-            ),
+            status=Status(code=Code.OK,message="OK",),
             loss=0.0,
             num_examples=self.num_test,
-            metrics={f"{metric_name}": metric},
+            metrics={f"{self.metric_name}": metric},
         )
 
-    def _load_data(self,) -> Tuple[DataLoader, DataLoader]:
-        """Return the dataloader for the client."""
-        # Get client partition
-        partition = self.fds.load_partition(self.cid, split="train")
-
-        # Divide partition into train and test
-        partition_train_test = partition.train_test_split(test_size=0.2)
-        trainset, testset = partition_train_test["train"], partition_train_test["test"]
-        dataset_name = self.cfg.dataset_name
-
-        # Set train and test data
-        train_data, test_data = DataFrame(trainset), DataFrame(testset)
-        X_train, y_train = train_data.drop(TARGET[dataset_name], axis=1), train_data[TARGET[dataset_name]]
-        X_test, y_test = test_data.drop(TARGET[dataset_name], axis=1), test_data[TARGET[dataset_name]]
-
-        # Set DMatrix
-        train_dmatrix = xgb.DMatrix(X_train, label=y_train)
-        valid_dmatrix = xgb.DMatrix(X_test, label=y_test)
-
-        return train_dmatrix, valid_dmatrix
     
 class GLXGBClient(fl.client.Client):
     def __init__(
@@ -441,11 +405,53 @@ def get_client_fn(
         device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
         if cfg.model_name != 'xgboost': 
             model = instantiate(cfg.model).to(device)
+        else: 
+            model = None
 
-        if cfg.model_name != 'xgboost': 
-            if cfg.model_name == 'cnn':
-                return GLXGBClient(model, df, device, cid, cfg.client)
-            return NetClient(model, df, device, cid, cfg.client)
-        return XgbClient(df, device, cid, cfg.client)
+        client = _get_client_class(cfg.model_name)
+        return client(model, df, device, cid, cfg.client)
 
     return client_fn
+
+def _get_client_class(model_name: str) -> Callable:
+    """Get the client class based on the model name."""
+    if model_name == "cnn":
+        return GLXGBClient
+    elif model_name == "xgboost":
+        return XgbClient
+    elif model_name in ["mlp", "resnet"]:
+        return NetClient
+    else:
+        raise ValueError(f"Unknown model name: {model_name}")
+    
+def _load_data(df, cfg, batch_size, tag: str = 'tabular') -> Tuple[DataLoader, DataLoader]:
+        """Return the dataloader for the client."""
+        df = df.drop(columns=['ID'])
+        dataset_name = cfg.dataset_name
+        trainset, testset = train_test_split(df, test_size=0.2, random_state=42)
+
+        # Scale data
+        trainset, testset = scale_data(trainset, TARGET[dataset_name]), scale_data(testset, TARGET[dataset_name])
+
+        # Get dataset class
+        dataset_class = _get_dataset_class(tag)
+        train_data = dataset_class(trainset, TARGET[dataset_name])
+        test_data = dataset_class(testset, TARGET[dataset_name])
+
+        if tag == 'dmatrix':
+            return train_data, test_data
+        trainloader = DataLoader(train_data, batch_size=batch_size, shuffle=True)
+        testloader = DataLoader(test_data, batch_size=len(testset), shuffle=False)
+
+        return trainloader, testloader
+
+def _get_dataset_class(tag: str = 'tabular') -> Callable:
+    """Get the dataset class based on the tag."""
+    if tag == "tabular":
+        return TabularDataset
+    elif tag == "tree":
+        return TreeDataset
+    elif tag == "dmatrix":
+        return transform_dataset_to_dmatrix
+    else:
+        raise ValueError(f"Unknown dataset tag: {tag}")

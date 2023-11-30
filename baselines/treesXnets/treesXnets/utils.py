@@ -9,7 +9,10 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from typing import Tuple, Callable, Optional, OrderedDict
-from sklearn.metrics import r2_score, accuracy_score, mean_squared_error, f1_score, roc_auc_score
+from sklearn.metrics import (
+    r2_score, accuracy_score, mean_squared_error, f1_score, roc_auc_score,
+    mean_absolute_error
+)
 from pandas import DataFrame
 from omegaconf import DictConfig
 from torch.optim import Adam, Optimizer
@@ -76,13 +79,15 @@ def _get_scores(task, target, output):
             metrics = {"accuracy": acc, "f1": f1}
     else:
         r2 = r2_score(target.cpu().numpy(), output.cpu().numpy())
-        metrics = {"r2": r2}
+        mae = mean_absolute_error(target.cpu().numpy(), output.cpu().numpy())
+        metrics = {"r2": r2, "mae": mae}
     return metrics
     
 def train(
     net: nn.Module,
     trainloader: DataLoader,
-    cfg: DictConfig
+    cfg: DictConfig,
+    central: bool = False,
 ) -> None:
     # pylint: disable=too-many-arguments
     """Train the network on the training set.
@@ -107,7 +112,8 @@ def train(
         optimizer = Adam(net.parameters(), lr=lr, weight_decay=wd)
         # Train model
         net.train()
-        for _ in range(cfg.num_epochs):
+        num_epochs = cfg.num_rounds if central else cfg.num_epochs
+        for _ in range(num_epochs):
             net = _train_one_epoch(net, trainloader, cfg.device, criterion, optimizer, cfg.task)
     else:
         raise NotImplementedError
@@ -262,6 +268,7 @@ def plot_metric_from_history(
     suffix: Optional[str] = "",
     metric_type: Optional[str] = "centralized",
     regression: Optional[bool] = False,
+    model_name: Optional[str] = "mlp",
 ) -> None:
     """Plot from Flower server History.
 
@@ -282,7 +289,7 @@ def plot_metric_from_history(
     print(metric_dict)
 
     if regression:
-        _, values = zip(*metric_dict["rmse"])
+        _, values = zip(*metric_dict["mae"])
         values = tuple(x for x in values)
     else:
         _, values = zip(*metric_dict["accuracy"])
@@ -300,14 +307,17 @@ def plot_metric_from_history(
     _, axs = plt.subplots(nrows=2, ncols=1, sharex="row")
     axs[0].plot(np.asarray(rounds_loss), np.asarray(values_loss))
     if metric_type == "centralized":
-        axs[1].plot(np.asarray(rounds_loss), np.asarray(values))    
+        if model_name =='xgboost':
+            axs[1].plot(np.asarray(rounds_loss[1:]), np.asarray(values))
+        else:
+            axs[1].plot(np.asarray(rounds_loss), np.asarray(values))    
     else:
         axs[1].plot(np.asarray(rounds_loss), np.asarray(values))
 
     axs[0].set_ylabel("Loss")
 
     if regression:
-        axs[1].set_ylabel("RMSE")
+        axs[1].set_ylabel("MAE")
     else:
         axs[1].set_ylabel("Accuracy")
 
@@ -335,6 +345,14 @@ def modify_config(cfg: DictConfig) -> DictConfig:
     """Modify the config file to add the correct paths."""
     # Get model target
     cfg.model._target_ = _get_model_target(cfg.model_name)
+    # Get strategy target
+    if cfg.model_name == "xgboost":
+        cfg.strategy._target_ = "flwr.server.strategy.fedxgb_bagging.FedXgbBagging"
+        cfg.strategy_name = "xgboost"
+    elif cfg.model_name == "glxgb":
+        cfg.strategy._target_ = "flwr.server.strategy.fedxgb_nn_avg.FedXgbNnAvg"
+        cfg.strategy_name = "fedxgb_nn_avg"
+
     return cfg
 
 def _get_model_target(model_name: str) -> str:
@@ -349,7 +367,7 @@ def _get_model_target(model_name: str) -> str:
     elif model_name == "glxgb":
         return "treesXnets.models.CNN"
     else:
-        raise ValueError("Unknown model name.")
+        raise ValueError("Unknown model name.")    
 
 def update_model_state(model, parameters, device):
     """ Update the model using the parameters."""
@@ -381,8 +399,10 @@ def partition_to_dataloader(
         Whether the dataset is a test dataset.
 
     """
+    if test: 
+        batch_size = len(dataset)
     if tag == "tabular":
-        return _partition_to_tabular(dataset, dataset_name, batch_size, test)
+        return _partition_to_tabular(dataset, dataset_name, batch_size)
     else:
         raise ValueError(f"Unknown dataset tag {tag}.")
 
@@ -390,7 +410,6 @@ def _partition_to_tabular(
         dataset, 
         dataset_name: str, 
         batch_size: int = 64, 
-        test: bool = False
     ):
     """ Convert a HuggingFace partition of dataset to a PyTorch DataLoader.
 

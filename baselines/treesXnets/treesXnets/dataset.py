@@ -51,8 +51,6 @@ def load_data(cfg: DictConfig, task: str) -> FederatedDataset:
         df["ID"] = client_id
         df_list.append(df)
     df = DataFrame(concat(df_list, ignore_index=True))
-    print(df)
-    quit()
 
     # Get number of input features and classes
     cfg.num_input = len(df.columns)-2
