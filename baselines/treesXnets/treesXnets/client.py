@@ -20,7 +20,8 @@ from treesXnets.utils import test, TabularDataset, _train_one_epoch, scale_data
 from treesXnets.models import CNN
 from treesXnets.tree_utils import (
     tree_encoding_loader, TreeDataset, construct_tree_from_loader,
-    train_tree, test_tree, mae_metric, r2_metric, f1_metric, accuracy, transform_dataset_to_dmatrix
+    train_tree, test_tree, mae_metric, r2_metric, f1_metric, accuracy, transform_dataset_to_dmatrix,
+    get_dataloader
 )
 import numpy as np
 from xgboost import XGBClassifier, XGBRegressor
@@ -197,48 +198,40 @@ class XgbClient(fl.client.Client):
             num_examples=self.num_test,
             metrics={f"{self.metric_name}": metric},
         )
-
     
 class GLXGBClient(fl.client.Client):
     def __init__(
-        self, 
-        net, 
-        df: DataFrame, 
-        device: str, 
-        cid: str, 
-        cfg: DictConfig
+        self,
+        net: torch.nn.Module,
+        df: DataFrame,
+        device: torch.device,
+        cid: str,
+        cfg: DictConfig,
     ):
         """
         Creates a client for training `network.Net` on tabular dataset.
         """
-
-        self.task = cfg.task
         self.cid = int(cid)
-        # get only the rows in dataframe that correspond to this client ID
-        self.df = df[df["ID"] == self.cid]
-        self.cfg = cfg
-        self.batch_size = cfg.batch_size
         self.client_tree_num = cfg.client_tree_num
-        self.num_clients = cfg.num_clients
+        self.client_num = cfg.num_clients
         self.properties = {"tensor_type": "numpy.ndarray"}
         self.log_progress = False
+
+        trainloader, valloader = _load_data(df, cfg, cfg.batch_size, tag="tree")
+        self.tree = construct_tree_from_loader(trainloader, cfg.client_tree_num, cfg.task)
+        self.trainloader_original = trainloader
+        self.valloader_original = valloader
+        self.trainloader = None
+        self.valloader = None
 
         # instantiate model
         self.net = net
 
         # determine device
-        self.device = device
+        self.device = device # if torch.cuda.is_available() else "cpu")
+        self.cfg = cfg
+        self.task_type = cfg.task
 
-        # load data
-        self.trainloader_original, self.testloader_original = _load_data(
-            self.df, 
-            cfg, 
-            cfg.batch_size, 
-            tag="tree"
-        )
-        self.tree = construct_tree_from_loader(self.trainloader_original, self.client_tree_num, self.task)
-
-    
     def get_properties(self, ins: GetPropertiesIns) -> GetPropertiesRes:
         return GetPropertiesRes(properties=self.properties)
 
@@ -276,7 +269,7 @@ class GLXGBClient(fl.client.Client):
     def fit(self, fit_params: FitIns) -> FitRes:
         # Process incoming request to train
         num_iterations = self.cfg.num_local_round
-        batch_size = self.batch_size
+        batch_size = self.cfg.batch_size
         aggregated_trees = self.set_parameters(fit_params.parameters)
 
         if type(aggregated_trees) is list:
@@ -288,24 +281,24 @@ class GLXGBClient(fl.client.Client):
             batch_size,
             aggregated_trees,
             self.client_tree_num,
-            self.num_clients,
+            self.client_num,
         )
-        self.testloader = tree_encoding_loader(
-            self.testloader_original,
+        self.valloader = tree_encoding_loader(
+            self.valloader_original,
             batch_size,
             aggregated_trees,
             self.client_tree_num,
-            self.num_clients,
+            self.client_num,
         )
 
         # num_iterations = None special behaviour: train(...) runs for a single epoch, however many updates it may be
-        num_iterations = num_iterations or len(self.trainloader)
+        num_iterations = num_iterations # or len(self.trainloader)
 
         # Train the model
         print(f"Client {self.cid}: training for {num_iterations} iterations/updates")
         self.net.to(self.device)
         train_loss, train_result, num_examples = train_tree(
-            self.task,
+            self.task_type,
             self.net,
             self.trainloader,
             device=self.device,
@@ -317,19 +310,19 @@ class GLXGBClient(fl.client.Client):
         )
 
         # Return training information: model, number of examples processed and metrics
-        if self.task == "classification":
+        if self.task_type == "classification":
             return FitRes(
                 status=Status(Code.OK, ""),
                 parameters=self.get_parameters(fit_params.config),
                 num_examples=num_examples,
                 metrics={"loss": train_loss, "accuracy": train_result},
             )
-        elif self.task == "regression":
+        elif self.task_type == "regression":
             return FitRes(
                 status=Status(Code.OK, ""),
                 parameters=self.get_parameters(fit_params.config),
                 num_examples=num_examples,
-                metrics={"loss": train_loss, "mae": train_result},
+                metrics={"loss": train_loss, "mse": train_result},
             )
 
     def evaluate(self, eval_params: EvaluateIns) -> EvaluateRes:
@@ -341,7 +334,7 @@ class GLXGBClient(fl.client.Client):
         loss, result, num_examples = test_tree(
             self.task_type,
             self.net,
-            self.testloader,
+            self.valloader,
             device=self.device,
             log_progress=self.log_progress,
         )
@@ -365,7 +358,7 @@ class GLXGBClient(fl.client.Client):
                 status=Status(Code.OK, ""),
                 loss=loss,
                 num_examples=num_examples,
-                metrics={"mae": result},
+                metrics={"mse": result},
             )
 
 def get_client_fn(
@@ -418,17 +411,31 @@ def _load_data(df, cfg, batch_size, tag: str = 'tabular') -> Tuple[DataLoader, D
         trainset, testset = train_test_split(df, test_size=0.2, random_state=42)
 
         # Scale data
-        trainset, testset = scale_data(trainset, TARGET[dataset_name]), scale_data(testset, TARGET[dataset_name])
+        # trainset, testset = scale_data(trainset, TARGET[dataset_name]), scale_data(testset, TARGET[dataset_name])
 
         # Get dataset class
         dataset_class = _get_dataset_class(tag)
-        train_data = dataset_class(trainset, TARGET[dataset_name])
-        test_data = dataset_class(testset, TARGET[dataset_name])
+        if tag == "tree":
+            X_train, y_train = trainset.drop(TARGET[dataset_name], axis=1), trainset[TARGET[dataset_name]]
+            X_test, y_test = testset.drop(TARGET[dataset_name], axis=1), testset[TARGET[dataset_name]]
+            X_train, y_train = X_train.to_numpy(), y_train.to_numpy()
+            X_test, y_test = X_test.to_numpy(), y_test.to_numpy()
+            X_train.flags.writeable, y_train.flags.writeable = True, True
+            X_test.flags.writeable, y_test.flags.writeable = True, True
+            train_data = dataset_class(X_train, y_train)
+            test_data = dataset_class(X_test, y_test)
+        else: 
+            train_data = dataset_class(trainset, TARGET[dataset_name])
+            test_data = dataset_class(testset, TARGET[dataset_name])
 
         if tag == 'dmatrix':
             return train_data, test_data
-        trainloader = DataLoader(train_data, batch_size=batch_size, shuffle=True)
-        testloader = DataLoader(test_data, batch_size=len(testset), shuffle=False)
+        if tag != 'tree':
+            trainloader = DataLoader(train_data, batch_size=batch_size, shuffle=True)
+            testloader = DataLoader(test_data, batch_size=len(testset), shuffle=False)
+        else:
+            trainloader = get_dataloader(train_data, 'train', batch_size=batch_size)
+            testloader = get_dataloader(test_data, 'val', batch_size=len(testset))
 
         return trainloader, testloader
 

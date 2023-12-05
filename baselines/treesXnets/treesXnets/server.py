@@ -48,7 +48,7 @@ from treesXnets.models import CNN
 from hydra.utils import instantiate
 from treesXnets.tree_utils import (
     BST_PARAMS, tree_encoding_loader, TreeDataset,
-    accuracy, f1_metric, r2_metric, mae_metric, test_tree
+    accuracy, f1_metric, r2_metric, mae_metric, test_tree, get_dataloader
 )
 from treesXnets.constants import TARGET
 
@@ -68,7 +68,6 @@ def eval_config(rnd: int) -> Dict[str, str]:
     }
     return config
 
-
 def evaluate_metrics_aggregation(eval_metrics):
     """Return an aggregated metric (AUC) for evaluation."""
     total_num = sum([num for num, _ in eval_metrics])
@@ -81,6 +80,49 @@ def evaluate_metrics_aggregation(eval_metrics):
     )
     metrics_aggregated = {f"{metric_name}": metric_aggregated}
     return metrics_aggregated
+
+def serverside_eval(
+    server_round: int,
+    parameters: Tuple[
+        Parameters,
+        Union[
+            Tuple[XGBClassifier, int],
+            Tuple[XGBRegressor, int],
+            List[Union[Tuple[XGBClassifier, int], Tuple[XGBRegressor, int]]],
+        ],
+    ],
+    config: Dict[str, Scalar],
+    task_type: str,
+    testloader: DataLoader,
+    batch_size: int,
+    client_tree_num: int,
+    client_num: int,
+) -> Tuple[float, Dict[str, float]]:
+    """An evaluation function for centralized/serverside evaluation over the entire test set."""
+    device = torch.device("cuda:0")
+    # device = "cpu"
+    model = CNN()
+    # print_model_layers(model)
+
+    model.set_weights(parameters_to_ndarrays(parameters[0]))
+    model.to(device)
+
+    trees_aggregated = parameters[1]
+    testloader = tree_encoding_loader(
+        testloader, batch_size, trees_aggregated, client_tree_num, client_num
+    )
+    loss, result, _ = test(
+        task_type, model, testloader, device=device, log_progress=False
+    )
+
+    if task_type == "classification":
+        print(
+            f"Evaluation on the server: test_loss={loss:.4f}, test_accuracy={result:.4f}"
+        )
+        return loss, {"accuracy": result}
+    elif task_type == "regression":
+        print(f"Evaluation on the server: test_loss={loss:.4f}, test_mse={result:.4f}")
+        return loss, {"mse": result}
 
 class FL_Server(fl.server.Server):
     """Flower server."""
@@ -311,9 +353,6 @@ class FL_Server(fl.server.Server):
         random_client = self._client_manager.sample(1)[0]
         ins = GetParametersIns(config={})
         get_parameters_res_tree = random_client.get_parameters(ins=ins, timeout=timeout)
-        print("----------------------------------")
-        print(get_parameters_res_tree)
-        print("----------------------------------")
         parameters = [get_parameters_res_tree[0].parameters, get_parameters_res_tree[1]]
         log(INFO, "Received initial parameters from one random client")
 
@@ -364,49 +403,6 @@ def get_evaluate_fn(
             loss, metrics = test(net, testloader, device=device, task=task, evaluate=True)
             return loss, metrics
         
-    elif model._target_ == "treesXnets.models.CNN":
-        def evaluate(
-            server_round: int,
-            parameters: Tuple[
-                Parameters,
-                Union[
-                    Tuple[XGBClassifier, int],
-                    Tuple[XGBRegressor, int],
-                    List[Union[Tuple[XGBClassifier, int], Tuple[XGBRegressor, int]]],
-                ],
-            ],
-            config: Dict[str, Scalar],
-        ) -> Tuple[float, Dict[str, float]]:
-            """An evaluation function for centralized/serverside evaluation over the entire test set."""
-            net = instantiate(model)
-
-            net.set_weights(parameters_to_ndarrays(parameters[0]))
-            net.to(device)
-
-            test_set = DataFrame(testdata)
-            len_test_set = len(test_set)
-            test_data = TreeDataset(test_set, TARGET[dataset_name])
-            testloader = DataLoader(test_data, batch_size=len_test_set, shuffle=False)
-
-            trees_aggregated = parameters[1]
-            testloader = tree_encoding_loader(
-                testloader, model.batch_size, trees_aggregated, model.client_tree_num, 
-                model.num_clients
-            )
-            loss, result, _ = test_tree(
-                model.task, net, testloader, device=device, 
-                log_progress=False, num_classes=cfg.dataset.num_classes
-            )
-
-            if model.task == "classification":
-                print(
-                    f"Evaluation on the server: test_loss={loss:.4f}, test_accuracy={result:.4f}"
-                )
-                return loss, {"accuracy": result}
-            elif model.task == "regression":
-                print(f"Evaluation on the server: test_loss={loss:.4f}, test_mse={result:.4f}")
-                return loss, {"mse": result}
-
     else:
         def evaluate(
             server_round: int, parameters: Parameters, config: Dict[str, Scalar]
@@ -449,3 +445,45 @@ def get_evaluate_fn(
                 return 0, {f"{metric_name}": metric}
 
     return evaluate
+
+def serverside_eval(
+    server_round: int,
+    parameters: Tuple[
+        Parameters,
+        Union[
+            Tuple[XGBClassifier, int],
+            Tuple[XGBRegressor, int],
+            List[Union[Tuple[XGBClassifier, int], Tuple[XGBRegressor, int]]],
+        ],
+    ],
+    config: Dict[str, Scalar],
+    testloader: DataLoader,
+    cfg: DictConfig,
+) -> Tuple[float, Dict[str, float]]:
+    """An evaluation function for centralized/serverside evaluation over the entire test set."""
+    device = torch.device("cuda:0")
+    # device = "cpu"
+    model = instantiate(cfg.model)
+    # print_model_layers(model)
+
+    model.set_weights(parameters_to_ndarrays(parameters[0]))
+    model.to(device)
+
+    trees_aggregated = parameters[1]
+
+    testloader = tree_encoding_loader(
+        testloader, cfg.batch_size, trees_aggregated, 
+        cfg.model.client_tree_num, cfg.num_clients
+    )
+    loss, result, _ = test_tree(
+        cfg.task, model, testloader, device=device, log_progress=False
+    )
+
+    if cfg.task == "classification":
+        print(
+            f"Evaluation on the server: test_loss={loss:.4f}, test_accuracy={result:.4f}"
+        )
+        return loss, {"accuracy": result}
+    elif cfg.task == "regression":
+        print(f"Evaluation on the server: test_loss={loss:.4f}, test_mse={result:.4f}")
+        return loss, {"mse": result}

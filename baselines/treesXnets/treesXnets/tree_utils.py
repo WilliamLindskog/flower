@@ -194,36 +194,20 @@ def construct_tree(
 ) -> Union[XGBClassifier, XGBRegressor]:
     """Construct a xgboost tree form tabular dataset."""
     if tree_type == "classification":
-        if np.unique(label).shape[0] == 2:
-            tree = xgb.XGBClassifier(
-                objective="binary:logistic",
-                learning_rate=0.1,
-                max_depth=8,
-                n_estimators=n_estimators,
-                subsample=0.8,
-                colsample_bylevel=1,
-                colsample_bynode=1,
-                colsample_bytree=1,
-                alpha=5,
-                gamma=5,
-                num_parallel_tree=1,
-                min_child_weight=1,
-            )
-        else:
-            tree = xgb.XGBClassifier(
-                objective="multi:softmax",
-                learning_rate=0.1,
-                max_depth=8,
-                n_estimators=n_estimators,
-                subsample=0.8,
-                colsample_bylevel=1,
-                colsample_bynode=1,
-                colsample_bytree=1,
-                alpha=5,
-                gamma=5,
-                num_parallel_tree=1,
-                min_child_weight=1,
-            )
+        tree = xgb.XGBClassifier(
+            objective="binary:logistic",
+            learning_rate=0.1,
+            max_depth=8,
+            n_estimators=n_estimators,
+            subsample=0.8,
+            colsample_bylevel=1,
+            colsample_bynode=1,
+            colsample_bytree=1,
+            alpha=5,
+            gamma=5,
+            num_parallel_tree=1,
+            min_child_weight=1,
+        )
 
     elif tree_type == "regression":
         tree = xgb.XGBRegressor(
@@ -243,7 +227,6 @@ def construct_tree(
 
     tree.fit(dataset, label)
     return tree
-
 
 def construct_tree_from_loader(
     dataset_loader: DataLoader, n_estimators: int, tree_type: str
@@ -325,21 +308,15 @@ def tree_encoding(  # pylint: disable=R0914
     return x_train_enc32, y_train32
 
 class TreeDataset(Dataset):
-    def __init__(self, df, target: str, use_tensor: bool = False):
-        if use_tensor:
-            self.df = df
-            self.target = target
-        else:
-            self.df = df.drop(target, axis=1).values
-            self.df = torch.tensor(self.df, dtype=torch.float32)
-            self.target = df[target].values
-            self.target = torch.tensor(self.target, dtype=torch.float32)
+    def __init__(self, data: NDArray, labels: NDArray) -> None:
+        self.labels = labels
+        self.df = data
 
     def __len__(self) -> int:
-        return len(self.target)
+        return len(self.labels)
 
-    def __getitem__(self, idx: int):
-        label = self.target[idx]
+    def __getitem__(self, idx: int) -> Dict[int, NDArray]:
+        label = self.labels[idx]
         data = self.df[idx, :]
         sample = {0: data, 1: label}
         return sample
@@ -353,9 +330,9 @@ def train_tree(
     log_progress: bool = True,
 ) -> Tuple[float, float, int]:
     # Define loss and optimizer
-    if task_type == "BINARY":
+    if task_type == "classification":
         criterion = nn.BCELoss()
-    elif task_type == "REG":
+    elif task_type == "regression":
         criterion = nn.MSELoss()
     # optimizer = torch.optim.SGD(net.parameters(), lr=0.001, momentum=0.9, weight_decay=1e-6)
     optimizer = torch.optim.Adam(net.parameters(), lr=0.0001, betas=(0.9, 0.999))
@@ -381,6 +358,7 @@ def train_tree(
     for i, data in zip(range(num_iterations), pbar):
         tree_outputs, labels = data[0].to(device), data[1].to(device)
         optimizer.zero_grad()
+
         outputs = net(tree_outputs)
         loss = criterion(outputs, labels)
         loss.backward()
@@ -394,7 +372,7 @@ def train_tree(
             acc = Accuracy(task="binary")(outputs, labels.type(torch.int))
             total_result += acc * labels.size(0)
         elif task_type == "regression":
-            mse = MeanSquaredError()(outputs, labels.type(torch.int))
+            mse = MeanSquaredError()(outputs.cpu(), labels.type(torch.float).cpu())
             total_result += mse * labels.size(0)
 
         if log_progress:
@@ -424,15 +402,12 @@ def test_tree(
     testloader: DataLoader,
     device: torch.device,
     log_progress: bool = True,
-    num_classes: Optional[int] = 2,
 ) -> Tuple[float, float, int]:
     """Evaluates the network on test data."""
-    if num_classes is None:
-        raise ValueError("num_classes must be specified for classification tasks.")
-    elif num_classes == 1:
+    if task_type == "classification":
+        criterion = nn.BCELoss()
+    elif task_type == "regression":
         criterion = nn.MSELoss()
-    else:
-        criterion = nn.CrossEntropyLoss()
 
     total_loss, total_result, n_samples = 0.0, 0.0, 0
     net.eval()
@@ -475,7 +450,7 @@ def tree_encoding_loader(
     if encoding is None:
         return None
     data, labels = encoding
-    tree_dataset = TreeDataset(data, labels, use_tensor=True)
+    tree_dataset = TreeDataset(data, labels)
     return get_dataloader(tree_dataset, "tree", batch_size)
 
 def accuracy(preds: np.ndarray, target: np.ndarray) -> float:

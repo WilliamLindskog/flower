@@ -33,8 +33,8 @@ model:
   output_dim: ${dataset.num_classes}
   task: ${task}
   batch_size: ${batch_size}
-  n_channel: 1
-  client_tree_num: 2
+  n_channel: 64
+  client_tree_num: 30
   num_clients: ${num_clients}
 
 
@@ -62,11 +62,12 @@ client:
   wd: ${wd}
   device: ${device}
   num_epochs: ${num_epochs}
-  num_local_round: 4
-  client_tree_num: 3
+  num_local_round: 2
+  client_tree_num: ${model.client_tree_num}
   num_clients: ${num_clients}
   num_classes: ${dataset.num_classes}
   xgboost: ${xgboost}
+  n_channel: ${model.n_channel}
 
 client_resources:
   num_cpus: 16
