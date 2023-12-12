@@ -39,10 +39,14 @@ def load_data(cfg: DictConfig, task: str) -> FederatedDataset:
     dataset_name = cfg.name
     partitioner = get_partitioner(cfg.partition, cfg.id_col)
 
+    with open('./token.txt', 'r') as f:
+        token = f.read()
+
     fds = FederatedDataset(
         dataset = 'inria-soda/tabular-benchmark',
         subset = dataset_name,
         partitioners = {"train" : partitioner(cfg.num_clients)},
+        token = token,
     )
 
     df_list = []
