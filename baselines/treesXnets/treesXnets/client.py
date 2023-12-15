@@ -78,9 +78,12 @@ class NetClient(fl.client.NumPyClient):
     def fit(self, parameters, config: Dict[str, Scalar]):
         """Implement distributed fit function for a given client for FedAvg."""
         self.set_parameters(parameters)
+        # Get size of parameters in bytes 
+        total_bytes = sum([p.numel() * p.element_size() for p in self.net.parameters()])
         train(self.net, self.trainloader, self.cfg)
         final_p_np = self.get_parameters({})
-        return final_p_np, len(self.trainloader), {}
+
+        return final_p_np, len(self.trainloader), {'total_bytes': total_bytes}
 
     def evaluate(self, parameters, config: Dict[str, Scalar]):
         """Evaluate using given parameters."""

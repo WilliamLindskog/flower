@@ -5,6 +5,7 @@ example, you may define here things like: loading a model from a checkpoint, sav
 results, plotting.
 """
 import torch
+import pickle
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
@@ -79,8 +80,8 @@ def _get_scores(task, target, output):
             metrics = {"accuracy": acc, "f1": f1}
     else:
         r2 = r2_score(target.cpu().numpy(), output.cpu().numpy())
-        mae = mean_absolute_error(target.cpu().numpy(), output.cpu().numpy())
-        metrics = {"r2": r2, "mae": mae}
+        mse = mean_squared_error(target.cpu().numpy(), output.cpu().numpy())
+        metrics = {"r2": r2, "mse": mse}
     return metrics
     
 def train(
@@ -140,7 +141,7 @@ def _train_one_epoch(
     
 def _get_criterion(task: str) -> Callable:
     """ Get criterion/loss function for training. """
-    if task in ["multi", "binary"]:
+    if task in ["binary", "multi"]:
         criterion = nn.CrossEntropyLoss()
     elif task == "regression":
         criterion = nn.MSELoss()
@@ -289,10 +290,20 @@ def plot_metric_from_history(
     print(metric_dict)
 
     if regression:
-        _, values = zip(*metric_dict["mae"])
-        values = tuple(x for x in values)
+        # get mse and r2 values from metric_dict
+        m1, m2 = "mse", "r2"
+        _, values_m1 = zip(*metric_dict[m1])
+        _, values_m2 = zip(*metric_dict[m2])
+        values_m1 = tuple(x for x in values_m1)
+        values_m2 = tuple(x for x in values_m2)
     else:
-        _, values = zip(*metric_dict["accuracy"])
+        m1, m2 = "accuracy", "auc"
+        _, values_m1 = zip(*metric_dict[m1])
+        _, values_m2 = zip(*metric_dict[m2])
+        values_m1 = tuple(x for x in values_m1)
+        values_m2 = tuple(x for x in values_m2)
+
+
 
     if metric_type == "centralized":
         rounds_loss, values_loss = zip(*hist.losses_centralized)
@@ -304,22 +315,25 @@ def plot_metric_from_history(
         # make tuple of normal floats instead of tensors
 
 
-    _, axs = plt.subplots(nrows=2, ncols=1, sharex="row")
+    _, axs = plt.subplots(nrows=3, ncols=1, sharex="row")
     axs[0].plot(np.asarray(rounds_loss), np.asarray(values_loss))
     if metric_type == "centralized":
         if model_name =='xgboost':
             axs[1].plot(np.asarray(rounds_loss[1:]), np.asarray(values))
         else:
-            axs[1].plot(np.asarray(rounds_loss), np.asarray(values))    
+            axs[1].plot(np.asarray(rounds_loss), np.asarray(values_m1))    
+            axs[2].plot(np.asarray(rounds_loss), np.asarray(values_m2))
     else:
         axs[1].plot(np.asarray(rounds_loss), np.asarray(values))
 
     axs[0].set_ylabel("Loss")
 
     if regression:
-        axs[1].set_ylabel("MAE")
+        axs[1].set_ylabel("MSE")
+        axs[2].set_ylabel("R2")
     else:
         axs[1].set_ylabel("Accuracy")
+        axs[2].set_ylabel("AUC")
 
     # plt.title(f"{metric_type.capitalize()} Validation - MNIST")
     plt.xlabel("Rounds")
@@ -327,6 +341,18 @@ def plot_metric_from_history(
 
     plt.savefig(Path(save_plot_path) / Path(f"{metric_type}_metrics{suffix}.png"))
     plt.close()
+
+    # get distributed fit metrics from history
+
+    metric_dict = (hist.metrics_distributed_fit)
+    _, total_bytes = zip(*metric_dict["total_bytes"])
+    total_bytes = tuple(x for x in total_bytes)
+    # sum total bytes
+    total_bytes = sum(total_bytes)
+    print(total_bytes)
+    # store in txt
+    with open(Path(save_plot_path) / Path(f"{metric_type}_total_bytes{suffix}.txt"), "wb") as f:
+        f.write(str(total_bytes).encode())
 
 def empty_dir(path: Path) -> None:
     """Empty a directory.

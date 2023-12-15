@@ -7,6 +7,7 @@ model is going to be evaluated, etc. At the end, this script saves the results.
 # feel free to remove some if aren't needed
 import flwr as fl
 import hydra
+import time
 from omegaconf import DictConfig, OmegaConf
 from os.path import join
 import pickle
@@ -27,7 +28,7 @@ from treesXnets.utils import (
     plot_metric_from_history, empty_dir, modify_config, train, test,
     partition_to_dataloader
 )
-from treesXnets.strategy import get_strategy
+from treesXnets.strategy import get_strategy, agg_metrics_train
 
 from flwr.server.server import Server
 from flwr.server.client_manager import SimpleClientManager
@@ -131,7 +132,11 @@ def main(cfg: DictConfig) -> None:
                 accept_failures=False,
             )
         else:
-            strategy = instantiate(cfg.strategy, evaluate_fn=evaluate_fn)
+            strategy = instantiate(
+                cfg.strategy, 
+                evaluate_fn=evaluate_fn, 
+                fit_metrics_aggregation_fn=agg_metrics_train
+            )
 
         if cfg.model_name.lower() != 'glxgb':
             server = Server(strategy=strategy, client_manager=SimpleClientManager()) 
@@ -139,6 +144,8 @@ def main(cfg: DictConfig) -> None:
             server = FL_Server(strategy=strategy, client_manager=SimpleClientManager())
 
         # 5. Start Simulation
+        # measure time
+        start_time = time.time()
         history = fl.simulation.start_simulation(
             server=server,
             client_fn=client_fn,
@@ -150,6 +157,9 @@ def main(cfg: DictConfig) -> None:
             },
             strategy=strategy,
         )
+        end_time = time.time()
+        time_elapsed = end_time - start_time
+        print(f"Time elapsed: {time_elapsed:.2f} seconds")
 
         print(history)
 
@@ -158,6 +168,8 @@ def main(cfg: DictConfig) -> None:
         print(save_path)
         with open(join(save_path, "history.pkl"), "wb") as f_ptr:
             pickle.dump(history, f_ptr)
+        with open(join(save_path, "time.txt"), "w") as f_ptr:
+            f_ptr.write(str(time_elapsed))
 
         file_suffix: str = (
             f"_{cfg.strategy_name}"

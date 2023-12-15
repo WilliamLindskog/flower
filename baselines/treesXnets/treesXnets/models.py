@@ -51,7 +51,11 @@ class MLP(nn.Module):
                 self.model.add_module(f'fc{layer}', nn.Linear(self.hidden_dims[layer-1], self.hidden_dims[layer]))
                 self.model.add_module(f'act{layer}', nn.ReLU())
 
-        self.model.add_module(f'fc{self.num_layers}', nn.Linear(self.hidden_dims[-1], self.output_dim))
+        if self.output_dim == 2:
+            self.model.add_module(f'fc{self.num_layers}', nn.Linear(self.hidden_dims[-1], self.output_dim))
+            self.model.add_module(f'act{self.num_layers}', nn.Sigmoid())
+        else: 
+            self.model.add_module(f'fc{self.num_layers}', nn.Linear(self.hidden_dims[-1], self.output_dim))
 
     def forward(self, x):
         """ Forward pass. """

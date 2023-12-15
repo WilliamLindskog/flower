@@ -59,4 +59,8 @@ def load_data(cfg: DictConfig, task: str) -> FederatedDataset:
     # Get number of input features and classes
     cfg.num_input = len(df.columns)-2
     cfg.num_classes = NUM_CLASSES[dataset_name]
+    if cfg.num_classes > 1:
+        # ensure that target value starts at 0
+        if df[TARGET[dataset_name]].min() != 0:
+            df[TARGET[dataset_name]] -= df[TARGET[dataset_name]].min()
     return df, cfg
