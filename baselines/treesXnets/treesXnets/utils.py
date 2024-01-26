@@ -16,7 +16,7 @@ from sklearn.metrics import (
 )
 from pandas import DataFrame
 from omegaconf import DictConfig
-from torch.optim import Adam, Optimizer
+from torch.optim import Adam, Optimizer, SGD
 from flwr.server.history import History
 from pathlib import Path
 
@@ -106,11 +106,11 @@ def train(
     -------
     None
     """
-    if cfg.strategy_name == 'fedavg':
+    if cfg.strategy_name in ['fedavg','fedprox']:
         # Get training parameters
         criterion = _get_criterion(cfg.task)
         lr, wd = cfg.lr, cfg.wd
-        optimizer = Adam(net.parameters(), lr=lr, weight_decay=wd)
+        optimizer = SGD(net.parameters(), lr=lr, weight_decay=wd)
         # Train model
         net.train()
         num_epochs = cfg.num_rounds if central else cfg.num_epochs
