@@ -151,6 +151,13 @@ CONSTANTS = {
     }
 }
 
+# Save the following as a dictionary json in /data
+#import json
+#with open('./treesXnets/data/constants.json', 'w') as f:
+#    json.dump(CONSTANTS, f, indent=4)
+#f.close()
+
+#quit()
 TASKS = {
     'reg_num_abalone' : 'regression',
     'reg_num_Ailerons' : 'regression',

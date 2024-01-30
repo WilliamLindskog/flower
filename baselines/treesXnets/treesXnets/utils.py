@@ -110,7 +110,7 @@ def train(
         # Get training parameters
         criterion = _get_criterion(cfg.task)
         lr, wd = cfg.lr, cfg.wd
-        optimizer = SGD(net.parameters(), lr=lr, weight_decay=wd)
+        optimizer = Adam(net.parameters(), lr=lr, weight_decay=wd)
         # Train model
         net.train()
         num_epochs = cfg.num_rounds if central else cfg.num_epochs

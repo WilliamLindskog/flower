@@ -39,9 +39,11 @@ def load_data(cfg: DictConfig, task: str) -> FederatedDataset:
     dataset_name = cfg.name
     partitioner = get_partitioner(cfg.partition, cfg.id_col)
 
+    # Get token
     with open('./token.txt', 'r') as f:
         token = f.read()
 
+    # Load dataset
     fds = FederatedDataset(
         dataset = 'inria-soda/tabular-benchmark',
         subset = dataset_name,
@@ -59,7 +61,17 @@ def load_data(cfg: DictConfig, task: str) -> FederatedDataset:
     # Get number of input features and classes
     cfg.num_input = len(df.columns)-2
     cfg.num_classes = NUM_CLASSES[dataset_name]
+
+    # if nans drop 
+    if df.isnull().values.any():
+        print(len(df))
+        df = df.dropna()
+        print(len(df))
+
     if cfg.num_classes > 1:
+        # if values in target are not integers, convert them to category
+        if not isinstance(df[TARGET[dataset_name]].dtype, int):
+            df[TARGET[dataset_name]] = df[TARGET[dataset_name]].astype("category").cat.codes
         # ensure that target value starts at 0
         if df[TARGET[dataset_name]].min() != 0:
             df[TARGET[dataset_name]] -= df[TARGET[dataset_name]].min()

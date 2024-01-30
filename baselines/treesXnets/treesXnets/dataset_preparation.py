@@ -43,6 +43,7 @@ from flwr_datasets.partitioner import (
 )
 
 from typing import Callable, Optional
+import pandas as pd
 
 def get_partitioner(partition_name: str, id_col: Optional[str] = None) -> Callable:
     """Return the partitioner function given its name.
@@ -72,3 +73,4 @@ def get_partitioner(partition_name: str, id_col: Optional[str] = None) -> Callab
         return IidPartitioner
     else:
         raise ValueError(f"Partitioner {partition_name} not found.")
+    
