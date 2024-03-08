@@ -37,6 +37,14 @@ class FedXgbCyclic(FedAvg):
         self.global_model: Optional[bytes] = None
         super().__init__(**kwargs)
 
+<<<<<<< HEAD
+=======
+    def __repr__(self) -> str:
+        """Compute a string representation of the strategy."""
+        rep = f"FedXgbCyclic(accept_failures={self.accept_failures})"
+        return rep
+
+>>>>>>> upstream/main
     def aggregate_fit(
         self,
         server_round: int,

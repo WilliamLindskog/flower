@@ -3,6 +3,10 @@
 It includes processioning the dataset, instantiate strategy, specify how the global
 model is going to be evaluated, etc. At the end, this script saves the results.
 """
+<<<<<<< HEAD
+=======
+
+>>>>>>> upstream/main
 import functools
 from typing import Dict, Union
 

@@ -1,4 +1,8 @@
+<<<<<<< HEAD
 name: Reusable docker server image build workflow
+=======
+name: Reusable docker image build workflow
+>>>>>>> upstream/main
 
 on:
   workflow_call:
@@ -35,19 +39,45 @@ permissions:
 # based on https://docs.docker.com/build/ci/github-actions/multi-platform/#distribute-build-across-multiple-runners
 jobs:
   build:
+<<<<<<< HEAD
     name: Build server image
     runs-on: ubuntu-22.04
     timeout-minutes: 60
+=======
+    name: Build image
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    outputs:
+      build-id: ${{ steps.build-id.outputs.id }}
+>>>>>>> upstream/main
     strategy:
       fail-fast: true
       matrix:
         platform: [
             # build-push action and qemu use different platform names
             # therefore we create a map
+<<<<<<< HEAD
             { qemu: "", docker: "linux/amd64" },
             { qemu: "arm64", docker: "linux/arm64" },
           ]
     steps:
+=======
+            { name: "amd64", qemu: "", docker: "linux/amd64" },
+            { name: "arm64", qemu: "arm64", docker: "linux/arm64" },
+          ]
+    steps:
+      - name: Create build id
+        id: build-id
+        shell: python
+        run: |
+          import hashlib
+          import os
+
+          hash = hashlib.sha256('''${{ inputs.build-args }}'''.encode())
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as fh:
+              print(f"id={hash.hexdigest()}", file=fh)
+
+>>>>>>> upstream/main
       - name: Set up QEMU
         if: matrix.platform.qemu != ''
         uses: docker/setup-qemu-action@68827325e0b33c7199eb31dd4e31fbe9023e06e3 # v3.0.0
@@ -85,9 +115,15 @@ jobs:
           touch "/tmp/digests/${digest#sha256:}"
 
       - name: Upload digest
+<<<<<<< HEAD
         uses: actions/upload-artifact@a8a3f3ad30e3422c9c7b888a15615d19a852ae32 # v3.1.3
         with:
           name: digests
+=======
+        uses: actions/upload-artifact@1eb3cb2b3e0f29609092a73eb033bb759a334595 # v4.1.0
+        with:
+          name: digests-${{ steps.build-id.outputs.id }}-${{ matrix.platform.name }}
+>>>>>>> upstream/main
           path: /tmp/digests/*
           if-no-files-found: error
           retention-days: 1
@@ -101,10 +137,18 @@ jobs:
       metadata: ${{ steps.meta.outputs.json }}
     steps:
       - name: Download digests
+<<<<<<< HEAD
         uses: actions/download-artifact@9bc31d5ccc31df68ecc42ccf4149144866c47d8a # v3.0.2
         with:
           name: digests
           path: /tmp/digests
+=======
+        uses: actions/download-artifact@eaceaf801fd36c7dee90939fad912460b18a1ffe # v4.1.2
+        with:
+          pattern: digests-${{ needs.build.outputs.build-id }}-*
+          path: /tmp/digests
+          merge-multiple: true
+>>>>>>> upstream/main
 
       - name: Docker meta
         id: meta
