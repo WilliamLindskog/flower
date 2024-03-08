@@ -7,13 +7,8 @@ msgid ""
 msgstr ""
 "Project-Id-Version: Flower main\n"
 "Report-Msgid-Bugs-To: \n"
-<<<<<<< HEAD
-"POT-Creation-Date: 2023-11-23 18:31+0100\n"
-"PO-Revision-Date: 2023-11-25 19:00+0000\n"
-=======
 "POT-Creation-Date: 2024-02-13 11:23+0100\n"
 "PO-Revision-Date: 2024-02-19 11:37+0000\n"
->>>>>>> upstream/main
 "Last-Translator: Yan Gao <y.gaogy@gmail.com>\n"
 "Language-Team: Chinese (Simplified) <https://hosted.weblate.org/projects/"
 "flower-docs/framework/zh_Hans/>\n"
@@ -22,11 +17,7 @@ msgstr ""
 "Content-Type: text/plain; charset=utf-8\n"
 "Content-Transfer-Encoding: 8bit\n"
 "Plural-Forms: nplurals=1; plural=0;\n"
-<<<<<<< HEAD
-"X-Generator: Weblate 5.2.1-rc\n"
-=======
 "X-Generator: Weblate 5.4\n"
->>>>>>> upstream/main
 "Generated-By: Babel 2.13.1\n"
 
 #: ../../source/contributor-explanation-architecture.rst:2
@@ -39,15 +30,9 @@ msgstr "边缘客户端引擎"
 
 #: ../../source/contributor-explanation-architecture.rst:7
 msgid ""
-<<<<<<< HEAD
-"`Flower <https://flower.dev>`_ core framework architecture with Edge "
-"Client Engine"
-msgstr "具有边缘客户端引擎的`Flower <https://flower.dev>`核心架构"
-=======
 "`Flower <https://flower.ai>`_ core framework architecture with Edge "
 "Client Engine"
 msgstr "具有边缘客户端引擎的`Flower <https://flower.ai>`核心架构"
->>>>>>> upstream/main
 
 #: ../../source/contributor-explanation-architecture.rst:13
 msgid "Virtual Client Engine"
@@ -55,15 +40,9 @@ msgstr "虚拟客户端引擎"
 
 #: ../../source/contributor-explanation-architecture.rst:15
 msgid ""
-<<<<<<< HEAD
-"`Flower <https://flower.dev>`_ core framework architecture with Virtual "
-"Client Engine"
-msgstr "具有虚拟客户端引擎的`Flower <https://flower.dev>`核心架构"
-=======
 "`Flower <https://flower.ai>`_ core framework architecture with Virtual "
 "Client Engine"
 msgstr "具有虚拟客户端引擎的`Flower <https://flower.ai>`核心架构"
->>>>>>> upstream/main
 
 #: ../../source/contributor-explanation-architecture.rst:21
 msgid "Virtual Client Engine and Edge Client Engine in the same workload"
@@ -71,123 +50,6 @@ msgstr "可同步进行的虚拟客户端引擎和边缘客户端引擎"
 
 #: ../../source/contributor-explanation-architecture.rst:23
 msgid ""
-<<<<<<< HEAD
-"`Flower <https://flower.dev>`_ core framework architecture with both "
-"Virtual Client Engine and Edge Client Engine"
-msgstr "具有虚拟客户端引擎和边缘客户端引擎的`Flower <https://flower.dev>`核心架构"
-
-#: ../../source/contributor-how-create-new-messages.rst:2
-msgid "Creating New Messages"
-msgstr "创建新信息"
-
-#: ../../source/contributor-how-create-new-messages.rst:4
-msgid ""
-"This is a simple guide for creating a new type of message between the "
-"server and clients in Flower."
-msgstr ""
-
-#: ../../source/contributor-how-create-new-messages.rst:6
-msgid ""
-"Let's suppose we have the following example functions in "
-":code:`server.py` and :code:`numpy_client.py`..."
-msgstr ""
-
-#: ../../source/contributor-how-create-new-messages.rst:8
-msgid "Server's side:"
-msgstr ""
-
-#: ../../source/contributor-how-create-new-messages.rst:17
-msgid "Client's side:"
-msgstr ""
-
-#: ../../source/contributor-how-create-new-messages.rst:26
-msgid ""
-"Let's now see what we need to implement in order to get this simple "
-"function between the server and client to work!"
-msgstr ""
-
-#: ../../source/contributor-how-create-new-messages.rst:30
-msgid "Message Types for Protocol Buffers"
-msgstr ""
-
-#: ../../source/contributor-how-create-new-messages.rst:32
-msgid ""
-"The first thing we need to do is to define a message type for the RPC "
-"system in :code:`transport.proto`. Note that we have to do it for both "
-"the request and response messages. For more details on the syntax of "
-"proto3, please see the  `official documentation "
-"<https://developers.google.com/protocol-buffers/docs/proto3>`_."
-msgstr ""
-
-#: ../../source/contributor-how-create-new-messages.rst:35
-msgid "Within the :code:`ServerMessage` block:"
-msgstr ""
-
-#: ../../source/contributor-how-create-new-messages.rst:52
-msgid "Within the ClientMessage block:"
-msgstr ""
-
-#: ../../source/contributor-how-create-new-messages.rst:70
-msgid ""
-"Make sure to also add a field of the newly created message type in "
-":code:`oneof msg`."
-msgstr ""
-
-#: ../../source/contributor-how-create-new-messages.rst:72
-msgid "Once that is done, we will compile the file with:"
-msgstr ""
-
-#: ../../source/contributor-how-create-new-messages.rst:78
-msgid "If it compiles succesfully, you should see the following message:"
-msgstr ""
-
-#: ../../source/contributor-how-create-new-messages.rst:87
-msgid "Serialization and Deserialization Functions"
-msgstr ""
-
-#: ../../source/contributor-how-create-new-messages.rst:89
-msgid ""
-"Our next step is to add functions to serialize and deserialize Python "
-"datatypes to or from our defined RPC message types. You should add these "
-"functions in :code:`serde.py`."
-msgstr ""
-
-#: ../../source/contributor-how-create-new-messages.rst:91
-msgid "The four functions:"
-msgstr ""
-
-#: ../../source/contributor-how-create-new-messages.rst:112
-msgid "Sending the Message from the Server"
-msgstr ""
-
-#: ../../source/contributor-how-create-new-messages.rst:114
-msgid ""
-"Now write the request function in your Client Proxy class (e.g., "
-":code:`grpc_client_proxy.py`) using the serde functions you just created:"
-msgstr ""
-
-#: ../../source/contributor-how-create-new-messages.rst:128
-msgid "Receiving the Message by the Client"
-msgstr ""
-
-#: ../../source/contributor-how-create-new-messages.rst:130
-msgid ""
-"Last step! Modify the code in :code:`message_handler.py` to check the "
-"field of your message and call the :code:`example_response` function. "
-"Remember to use the serde functions!"
-msgstr ""
-
-#: ../../source/contributor-how-create-new-messages.rst:132
-msgid "Within the handle function:"
-msgstr ""
-
-#: ../../source/contributor-how-create-new-messages.rst:139
-msgid "And add a new function:"
-msgstr ""
-
-#: ../../source/contributor-how-create-new-messages.rst:149
-msgid "Hopefully, when you run your program you will get the intended result!"
-=======
 "`Flower <https://flower.ai>`_ core framework architecture with both "
 "Virtual Client Engine and Edge Client Engine"
 msgstr "具有虚拟客户端引擎和边缘客户端引擎的`Flower <https://flower.ai>`核心架构"
@@ -424,7 +286,6 @@ msgstr ""
 
 #: ../../source/contributor-how-to-build-docker-images.rst:131
 msgid "After creating the image, we can test whether the image is working:"
->>>>>>> upstream/main
 msgstr ""
 
 #: ../../source/contributor-how-to-contribute-translations.rst:2

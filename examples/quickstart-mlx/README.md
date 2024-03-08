@@ -66,31 +66,19 @@ following commands.
 Start a first client in the first terminal:
 
 ```shell
-<<<<<<< HEAD
-python3 client.py --node-id 0
-=======
 python3 client.py --partition-id 0
->>>>>>> upstream/main
 ```
 
 And another one in the second terminal:
 
 ```shell
-<<<<<<< HEAD
-python3 client.py --node-id 1
-=======
 python3 client.py --partition-id 1
->>>>>>> upstream/main
 ```
 
 If you want to utilize your GPU, you can use the `--gpu` argument:
 
 ```shell
-<<<<<<< HEAD
-python3 client.py --gpu --node-id 2
-=======
 python3 client.py --gpu --partition-id 2
->>>>>>> upstream/main
 ```
 
 Note that you can start many more clients if you want, but each will have to be in its own terminal.
@@ -108,11 +96,7 @@ We will use `flwr_datasets` to easily download and partition the `MNIST` dataset
 
 ```python
 fds = FederatedDataset(dataset="mnist", partitioners={"train": 3})
-<<<<<<< HEAD
-partition = fds.load_partition(node_id = args.node_id)
-=======
 partition = fds.load_partition(partition_id = args.partition_id)
->>>>>>> upstream/main
 partition_splits = partition.train_test_split(test_size=0.2)
 
 partition_splits['train'].set_format("numpy")

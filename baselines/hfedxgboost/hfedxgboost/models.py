@@ -5,10 +5,6 @@ modifications) you might be better off instantiating your  model directly from t
 config. In this way, swapping your model for  another one can be done without changing
 the python code at all
 """
-<<<<<<< HEAD
-=======
-
->>>>>>> upstream/main
 from collections import OrderedDict
 from typing import Union
 

@@ -4,10 +4,6 @@ They are not directly relevant to  the other (more FL specific) python modules. 
 example, you may define here things like: loading a model from a checkpoint, saving
 results, plotting.
 """
-<<<<<<< HEAD
-=======
-
->>>>>>> upstream/main
 import csv
 import math
 import os
@@ -319,15 +315,9 @@ def single_tree_preds_from_each_client(
 
     for i, _ in enumerate(temp_trees):
         for j in range(n_estimators_client):
-<<<<<<< HEAD
-            preds_from_all_trees_from_all_clients[
-                :, i * n_estimators_client + j
-            ] = single_tree_prediction(temp_trees[i], j, x_train)
-=======
             preds_from_all_trees_from_all_clients[:, i * n_estimators_client + j] = (
                 single_tree_prediction(temp_trees[i], j, x_train)
             )
->>>>>>> upstream/main
 
     preds_from_all_trees_from_all_clients = torch.from_numpy(
         np.expand_dims(preds_from_all_trees_from_all_clients, axis=1)

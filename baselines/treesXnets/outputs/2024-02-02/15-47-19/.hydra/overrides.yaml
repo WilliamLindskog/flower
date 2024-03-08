@@ -1,0 +1,2 @@
+- model_name=1dcnn
+- dataset.name=clf_num_electricity

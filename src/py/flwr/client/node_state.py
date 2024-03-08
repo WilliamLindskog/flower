@@ -17,39 +17,6 @@
 
 from typing import Any, Dict
 
-<<<<<<< HEAD
-from flwr.client.workload_state import WorkloadState
-
-
-class NodeState:
-    """State of a node where client nodes execute workloads."""
-
-    def __init__(self) -> None:
-        self._meta: Dict[str, Any] = {}  # holds metadata about the node
-        self.workload_states: Dict[int, WorkloadState] = {}
-
-    def register_workloadstate(self, workload_id: int) -> None:
-        """Register new workload state for this node."""
-        if workload_id not in self.workload_states:
-            self.workload_states[workload_id] = WorkloadState({})
-
-    def retrieve_workloadstate(self, workload_id: int) -> WorkloadState:
-        """Get workload state given a workload_id."""
-        if workload_id in self.workload_states:
-            return self.workload_states[workload_id]
-
-        raise RuntimeError(
-            f"WorkloadState for workload_id={workload_id} doesn't exist."
-            " A workload must be registered before it can be retrieved or updated "
-            " by a client."
-        )
-
-    def update_workloadstate(
-        self, workload_id: int, workload_state: WorkloadState
-    ) -> None:
-        """Update workload state."""
-        self.workload_states[workload_id] = workload_state
-=======
 from flwr.common import Context, RecordSet
 
 
@@ -79,4 +46,3 @@ class NodeState:
     def update_context(self, run_id: int, context: Context) -> None:
         """Update run context."""
         self.run_contexts[run_id] = context
->>>>>>> upstream/main

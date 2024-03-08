@@ -1,0 +1,73 @@
+num_clients: 10
+num_rounds: 30
+num_epochs: 3
+batch_size: 64
+device: cuda:0
+task: None
+strategy_name: fedprox
+lr: 0.005
+wd: 0.0
+model_name: mlp
+centralized_eval: true
+seed: 42
+federated: true
+dataset:
+  name: reg_num_nyc-taxi-green-dec-2016
+  partition: iid
+  id_col: None
+  num_clients: ${num_clients}
+  val_frac: 0.0
+  num_input: 0
+  num_classes: 0
+  test_frac: 0.2
+model:
+  _target_: treesXnets.models.ResNet
+  model_size: small
+  input_dim: ${dataset.num_input}
+  output_dim: ${dataset.num_classes}
+  task: ${task}
+  batch_size: ${batch_size}
+  n_channel: 64
+  client_tree_num: 30
+  num_clients: ${num_clients}
+strategy:
+  _target_: flwr.server.strategy.fedavg
+  min_fit_clients: ${num_clients}
+  min_evaluate_clients: ${num_clients}
+  min_available_clients: ${num_clients}
+  fraction_fit: 1.0
+  fraction_evaluate: 1.0
+  evaluate_fn: None
+  proximal_mu: 0.1
+  on_evaluate_config_fn:
+    _target_: treesXnets.strategy.get_evaluate_config
+client_fn:
+  _target_: treesXnets.client.get_client_fn
+  _recursive_: false
+client:
+  batch_size: ${batch_size}
+  task: ${task}
+  dataset_name: ${dataset.name}
+  strategy_name: ${strategy_name}
+  lr: ${lr}
+  wd: ${wd}
+  device: ${device}
+  num_epochs: ${num_epochs}
+  num_local_round: 2
+  client_tree_num: ${model.client_tree_num}
+  num_clients: ${num_clients}
+  num_classes: ${dataset.num_classes}
+  xgboost: ${xgboost}
+  n_channel: ${model.n_channel}
+client_resources:
+  num_cpus: 32
+  num_gpus: 1
+xgboost:
+  objective: reg:squarederror
+  eta: ${lr}
+  max_depth: 6
+  eval_metric: auc
+  nthread: 16
+  num_parallel_tree: 1
+  subsample: 1.0
+  tree_method: hist

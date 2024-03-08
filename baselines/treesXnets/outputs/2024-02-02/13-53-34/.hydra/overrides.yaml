@@ -1,0 +1,2 @@
+- model_name=ma1dcnn
+- dataset.name=reg_cat_SGEMM_GPU_kernel_performance

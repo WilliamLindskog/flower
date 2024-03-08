@@ -1,0 +1,2 @@
+- model_name=ma1dcnn
+- dataset.name=reg_num_houses

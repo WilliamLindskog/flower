@@ -1,0 +1,2 @@
+- model_name=resnet
+- dataset.name=reg_cat_particulate-matter-ukair-2017

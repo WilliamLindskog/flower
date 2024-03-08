@@ -1,0 +1,2 @@
+- model_name=resnet
+- dataset.name=reg_num_diamonds

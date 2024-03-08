@@ -3,8 +3,6 @@
 Needed only when the strategy is not yet implemented in Flower or because you want to
 extend or modify the functionality of an existing strategy.
 """
-<<<<<<< HEAD
-=======
 
 from logging import WARNING
 from typing import Any, Dict, List, Optional, Tuple, Union
@@ -79,4 +77,3 @@ class FedXgbNnAvg(FedAvg):
             log(WARNING, "No fit_metrics_aggregation_fn provided")
 
         return [parameters_aggregated, trees_aggregated], metrics_aggregated
->>>>>>> upstream/main

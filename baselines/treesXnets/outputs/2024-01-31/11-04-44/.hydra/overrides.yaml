@@ -1,0 +1,2 @@
+- model_name=resnet
+- dataset.name=clf_num_MagicTelescope

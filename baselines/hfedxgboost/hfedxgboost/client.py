@@ -3,10 +3,6 @@
 Please overwrite `flwr.client.NumPyClient` or `flwr.client.Client` and create a function
 to instantiate your client.
 """
-<<<<<<< HEAD
-=======
-
->>>>>>> upstream/main
 from typing import Any, Tuple
 
 import flwr as fl
@@ -217,11 +213,7 @@ class FlClient(fl.client.Client):
         aggregated_trees = ins.parameters[1]  # type: ignore # noqa: E501 # pylint: disable=line-too-long
 
         if isinstance(aggregated_trees, list):
-<<<<<<< HEAD
-            print("Client " + self.cid + ": recieved", len(aggregated_trees), "trees")
-=======
             print("Client " + self.cid + ": received", len(aggregated_trees), "trees")
->>>>>>> upstream/main
         else:
             print("Client " + self.cid + ": only had its own tree")
         trainloader: Any = single_tree_preds_from_each_client(

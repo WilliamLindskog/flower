@@ -1,0 +1,4 @@
+test_loss: 0.8255031108856201
+test_metrics: {'accuracy': 0.487758945386064, 'auc': 0.5}
+size: 2242968
+used_memory_mb: 1066.125

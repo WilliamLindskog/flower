@@ -8,10 +8,6 @@ partitioned, please include all those functions and logic in the
 `dataset_preparation.py` module. You can use all those functions from functions/methods
 defined here of course.
 """
-<<<<<<< HEAD
-=======
-
->>>>>>> upstream/main
 from typing import List, Optional, Tuple, Union
 
 import torch
