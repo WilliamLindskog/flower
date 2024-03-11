@@ -16,7 +16,7 @@ from pandas import DataFrame, concat
 from flwr_datasets import FederatedDataset
 from flwr_datasets.partitioner import (
     NaturalIdPartitioner, SizePartitioner, LinearPartitioner,
-    SquarePartitioner, ExponentialPartitioner
+    SquarePartitioner, ExponentialPartitioner, # ShardPartitioner, DirichletPartitioner
 )
 from treesXnets.constants import TARGET, TASKS, NUM_CLASSES
 from treesXnets.dataset_preparation import get_partitioner
@@ -43,13 +43,15 @@ def load_data(cfg: DictConfig, task: str) -> FederatedDataset:
     with open('./token.txt', 'r') as f:
         token = f.read()
 
-    # Load dataset
-    fds = FederatedDataset(
-        dataset = 'inria-soda/tabular-benchmark',
-        subset = dataset_name,
-        partitioners = {"train" : partitioner(cfg.num_clients)},
-        token = token,
+    fds = _get_federated_data(
+        dataset_name=dataset_name,
+        hf_dataset=cfg.hf_dataset,
+        partitioner=partitioner,
+        token=token,
+        num_clients=cfg.num_clients,
     )
+    print(f"Loaded {dataset_name} dataset with {cfg.num_clients} clients")
+    quit()
 
     df_list = []
     for client_id in range(cfg.num_clients):
@@ -76,3 +78,51 @@ def load_data(cfg: DictConfig, task: str) -> FederatedDataset:
         if df[TARGET[dataset_name]].min() != 0:
             df[TARGET[dataset_name]] -= df[TARGET[dataset_name]].min()
     return df, cfg
+
+
+def _get_federated_data(
+    dataset_name: str,
+    hf_dataset: str = "inria-soda/tabular-benchmark",
+    partitioner: str = "iid",
+    token: str = None,
+    num_clients: int = 10,
+) -> FederatedDataset:
+    """Return the data for the federated dataset.
+
+    Parameters
+    ----------
+    dataset_name : str
+        The name of the dataset.
+    hf_dataset : str
+        The name of the Hugging Face dataset.
+    partitioner : str
+        The name of the partitioner.
+    token : str
+        The token for the dataset.
+    num_clients : int
+        The number of clients.
+
+    Returns
+    -------
+    Tuple[Iterable[Tuple[int, DataFrame]], int]
+        The data for the federated dataset and the number of input features.
+    """
+    # Get partitioner
+    partitioner = get_partitioner(partitioner)
+
+    # Load dataset
+    if not isinstance(partitioner, ShardPartitioner): 
+        fds = FederatedDataset(
+            dataset=hf_dataset, subset=dataset_name,
+            partitioners={"train": partitioner(num_clients)}, token=token,
+        )
+    else: 
+        fds = FederatedDataset(
+            dataset=hf_dataset, subset=dataset_name,
+            partitioners={"train": partitioner(
+                num_partitions=num_clients, partition_by=TARGET[dataset_name], 
+                shard_size=100, keep_incomplete_shard=True)}, 
+                token=token,
+        )
+
+    return fds

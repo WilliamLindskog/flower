@@ -40,6 +40,7 @@ from flwr_datasets.partitioner import (
     SizePartitioner,
     SquarePartitioner,
     IidPartitioner,
+    ShardPartitioner,
 )
 
 from typing import Callable, Optional
@@ -71,6 +72,10 @@ def get_partitioner(partition_name: str, id_col: Optional[str] = None) -> Callab
         return ExponentialPartitioner
     elif partition_name == "iid":
         return IidPartitioner
+    elif partition_name == "label":
+        return ShardPartitioner
+    elif partition_name == "dirichlet":
+        return DirichletPartitioner
     else:
         raise ValueError(f"Partitioner {partition_name} not found.")
     

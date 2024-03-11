@@ -1,7 +1,3 @@
----
-# this is the config that will be loaded as default by main.py
-# Please follow the provided structure (this will ensuring all baseline follow
-# a similar configuration structure and hence be easy to customise)
 num_clients: 10
 num_rounds: 3
 num_epochs: 3
@@ -10,25 +6,23 @@ device: cuda:0
 task: None
 strategy_name: fedprox
 lr: 0.005
-wd: 0.00
+wd: 0.0
 model_name: mlp
-centralized_eval: True
+centralized_eval: true
 seed: 42
-federated: True
-
+federated: true
 dataset:
   name: clf_num_default-of-credit-card-clients
-  partition: label
+  partition: iid
   id_col: None
   num_clients: ${num_clients}
   val_frac: 0.0
   num_input: 0
   num_classes: 0
   test_frac: 0.2
-
 model:
   _target_: treesXnets.models.ResNet
-  model_size: small  # small, medium, large (check in model file for more info)
+  model_size: small
   input_dim: ${dataset.num_input}
   output_dim: ${dataset.num_classes}
   task: ${task}
@@ -36,8 +30,6 @@ model:
   n_channel: 64
   client_tree_num: 30
   num_clients: ${num_clients}
-
-
 strategy:
   _target_: flwr.server.strategy.fedavg
   min_fit_clients: ${num_clients}
@@ -47,14 +39,12 @@ strategy:
   fraction_evaluate: 1.0
   evaluate_fn: None
   proximal_mu: 0.1
-  on_evaluate_config_fn: 
+  on_evaluate_config_fn:
     _target_: treesXnets.strategy.get_evaluate_config
-
 client_fn:
   _target_: treesXnets.client.get_client_fn
-  _recursive_: False
-
-client: 
+  _recursive_: false
+client:
   batch_size: ${batch_size}
   task: ${task}
   dataset_name: ${dataset.name}
@@ -69,11 +59,9 @@ client:
   num_classes: ${dataset.num_classes}
   xgboost: ${xgboost}
   n_channel: ${model.n_channel}
-
 client_resources:
   num_cpus: 32
   num_gpus: 1
-
 xgboost:
   objective: reg:squarederror
   eta: ${lr}
@@ -82,4 +70,4 @@ xgboost:
   nthread: 16
   num_parallel_tree: 1
   subsample: 1.0
-  tree_method: "hist"
+  tree_method: hist

@@ -13,17 +13,13 @@ from os.path import join
 import pickle
 import numpy as np
 import functools
-from pandas import DataFrame
 
 from hydra.utils import call, instantiate
 from hydra.core.hydra_config import HydraConfig
 
 from treesXnets.dataset import load_data
-from treesXnets.server import (
-    get_evaluate_fn, eval_config, evaluate_metrics_aggregation, FL_Server,
-    serverside_eval
-)
-from treesXnets.constants import TASKS, TARGET, CONSTANTS
+from treesXnets.server import get_evaluate_fn, eval_config, FL_Server,serverside_eval
+from treesXnets.constants import TASKS, TARGET
 from treesXnets.utils import (
     plot_metric_from_history, empty_dir, modify_config, train, test,
     partition_to_dataloader
@@ -32,7 +28,6 @@ from treesXnets.strategy import get_strategy, agg_metrics_train
 
 from flwr.server.server import Server
 from flwr.server.client_manager import SimpleClientManager
-from flwr.server.strategy import FedAvg
 from flwr.server.strategy.fedxgb_bagging import FedXgbBagging
 from flwr.server.strategy.fedxgb_nn_avg import FedXgbNnAvg
 from pathlib import Path
@@ -48,7 +43,9 @@ os.environ["CURL_CA_BUNDLE"]=""
 import ssl
 ssl._create_default_https_context = ssl._create_unverified_context
 
-import requests
+# ignore warnings
+import warnings
+# warnings.filterwarnings("ignore")
 
 @hydra.main(config_path="conf", config_name="base", version_base=None)
 def main(cfg: DictConfig) -> None:
