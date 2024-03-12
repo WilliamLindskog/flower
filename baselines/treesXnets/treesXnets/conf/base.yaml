@@ -71,7 +71,7 @@ client:
   n_channel: ${model.n_channel}
 
 client_resources:
-  num_cpus: 32
+  num_cpus: 16
   num_gpus: 1
 
 xgboost:

@@ -50,9 +50,7 @@ def load_data(cfg: DictConfig, task: str) -> FederatedDataset:
 
     if cfg.partition == "label":
         df = _label_partition(df, cfg.num_clients, "ID", TARGET[dataset_name])
-    
 
-    quit()
     # Get number of input features and classes
     cfg.num_input = len(df.columns)-2
     cfg.num_classes = NUM_CLASSES[dataset_name]

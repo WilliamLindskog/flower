@@ -4,3 +4,6 @@
 [submodule "baselines/niid_bench/NVFlare"]
 	path = baselines/niid_bench/NVFlare
 	url = https://github.com/NVIDIA/NVFlare.git
+[submodule "baselines/treesXnets/treesXnets/leaf"]
+	path = baselines/treesXnets/treesXnets/leaf
+	url = https://github.com/TalwalkarLab/leaf.git

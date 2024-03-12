@@ -42,6 +42,12 @@ from flwr_datasets.partitioner import (
     IidPartitioner,
 )
 
+import numpy as np
+import pandas as pd
+from typing import Callable, Optional
+
+import random
+
 from treesXnets.partitioner.shard_partitioner import ShardPartitioner
 
 from typing import Callable, Optional
@@ -106,6 +112,39 @@ def _label_partition(
     """
     assert num_allotted > 0, "num_allotted must be greater than 0"
     assert num_allotted <= df[target_col].nunique(), "num_allotted must be less than or equal to the number of unique labels"
+    seed = random.randint(0, 1000)
+    prng = np.random.default_rng(seed)
 
+    targets = df[target_col].values
+    num_classes = len(set(targets))
+    times = [0 for _ in range(num_classes)]
+    contains = []
+
+    for i in range(num_clients):
+        current = [i % num_classes]
+        times[i % num_classes] += 1
+        j = 1
+        while j < num_allotted:
+            index = prng.choice(num_classes, 1)[0]
+            if index not in current:
+                current.append(index)
+                times[index] += 1
+                j += 1
+        contains.append(current)
+    idx_clients = [[] for _ in range(num_clients)]
+    for i in range(num_classes):
+        idx_k = np.where(targets == i)[0]
+        prng.shuffle(idx_k)
+        idx_k_split = np.array_split(idx_k, times[i])
+        ids = 0
+        for j in range(num_clients):
+            if i in contains[j]:
+                idx_clients[j] += idx_k_split[ids].tolist()
+                ids += 1
+    for i in range(num_clients):
+        prng.shuffle(idx_clients[i])
+    for i in range(num_clients):
+        df.loc[idx_clients[i], id_col] = i
+        
     return df
     
