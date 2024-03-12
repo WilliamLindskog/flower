@@ -40,8 +40,9 @@ from flwr_datasets.partitioner import (
     SizePartitioner,
     SquarePartitioner,
     IidPartitioner,
-    ShardPartitioner,
 )
+
+from treesXnets.partitioner.shard_partitioner import ShardPartitioner
 
 from typing import Callable, Optional
 import pandas as pd
@@ -70,12 +71,41 @@ def get_partitioner(partition_name: str, id_col: Optional[str] = None) -> Callab
         return SquarePartitioner
     elif partition_name == "exponential":
         return ExponentialPartitioner
-    elif partition_name == "iid":
+    elif partition_name in ["iid", "label"]:
         return IidPartitioner
-    elif partition_name == "label":
-        return ShardPartitioner
+    #elif partition_name == "label":
+    #    return ShardPartitioner
     elif partition_name == "dirichlet":
         return DirichletPartitioner
     else:
         raise ValueError(f"Partitioner {partition_name} not found.")
+    
+def _label_partition(
+        df: pd.DataFrame, num_clients: int, id_col: str, target_col: str,
+        num_allotted: Optional[int] = 1
+        ) -> pd.DataFrame:
+    """Partition the dataset by the label.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        The dataset to be partitioned.
+    num_clients : int
+        The number of clients.
+    id_col : str
+        The name of the column that contains the client id.
+    target_col : str
+        The name of the column that contains the target.
+    num_allotted : int, optional
+        The number of labels allotted to each client, by default 1.
+
+    Returns
+    -------
+    pd.DataFrame
+        The partitioned dataset.
+    """
+    assert num_allotted > 0, "num_allotted must be greater than 0"
+    assert num_allotted <= df[target_col].nunique(), "num_allotted must be less than or equal to the number of unique labels"
+
+    return df
     
