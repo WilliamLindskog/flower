@@ -188,7 +188,9 @@ TASKS = {
     'clf_num_jannis' : 'binary',
     'clf_num_bank-marketing' : 'binary',
     'clf_num_MagicTelescope' : 'binary',
-    'clf_num_MiniBooNE' : 'binary'
+    'clf_num_MiniBooNE' : 'binary',
+    'femnist' : 'multi',
+    'synthetic' : 'multi'
 }
 
 TARGET = {
@@ -221,7 +223,9 @@ TARGET = {
     'clf_num_jannis' : 'class',
     'clf_num_bank-marketing' : 'Class',
     'clf_num_MagicTelescope' : 'class',
-    'clf_num_MiniBooNE' : 'signal'
+    'clf_num_MiniBooNE' : 'signal',
+    'femnist' : 'y',    
+    'synthetic' : 'y'
 }
 
 NUM_CLASSES = {
@@ -254,5 +258,7 @@ NUM_CLASSES = {
     'clf_num_jannis' : 2,
     'clf_num_bank-marketing' : 2,
     'clf_num_MagicTelescope' : 2,
-    'clf_num_MiniBooNE' : 2
+    'clf_num_MiniBooNE' : 2,
+    'femnist' : 62,
+    'synthetic' : 10
 }

@@ -12,6 +12,10 @@ defined here of course.
 from omegaconf import DictConfig
 from typing import Iterable, Tuple, List
 from pandas import DataFrame, concat
+from pathlib import Path
+
+import pandas as pd
+from sklearn.model_selection import train_test_split
 
 from flwr_datasets import FederatedDataset
 from flwr_datasets.partitioner import (
@@ -19,8 +23,13 @@ from flwr_datasets.partitioner import (
     SquarePartitioner, ExponentialPartitioner, # ShardPartitioner, DirichletPartitioner
 )
 from treesXnets.constants import TARGET, TASKS, NUM_CLASSES
-from treesXnets.dataset_preparation import get_partitioner, _label_partition
+from treesXnets.dataset_preparation import get_partitioner, _label_partition, _check_data_gen, _gen_leaf_data, _create_df
 from treesXnets.partitioner.shard_partitioner import ShardPartitioner
+
+PATHS = {
+    'femnist' : 'treesXnets/leaf/data/femnist',
+    'synthetic' : 'treesXnets/leaf/data/synthetic',
+}
 
 def load_data(cfg: DictConfig, task: str) -> FederatedDataset:
     """Return the dataloaders for the dataset.
@@ -37,7 +46,15 @@ def load_data(cfg: DictConfig, task: str) -> FederatedDataset:
     Federated Dataset.
     """
 
-    fds = _get_federated_data(hf_dataset="inria-soda/tabular-benchmark",config=cfg,)
+    if cfg.name in ["femnist", "synthetic"]:
+        df = _download_data(cfg.name, cfg.fraction)
+        cfg.num_input = len(df.columns)-2
+        cfg.num_classes = NUM_CLASSES[cfg.name]
+        # set column "user" to "ID"
+        df.rename(columns={"user": "ID"}, inplace=True)
+        return df, cfg
+    else:
+        fds = _get_federated_data(hf_dataset="inria-soda/tabular-benchmark",config=cfg,)
     
 
     dataset_name = cfg.name
@@ -107,3 +124,47 @@ def _get_federated_data(
     )
 
     return fds
+
+def _download_data(dataset_name="emnist", fraction=None):
+    """Download the requested dataset. Currently supports cifar10, mnist, and fmnist.
+
+    Returns
+    -------
+    Tuple[Dataset, Dataset]
+        The training dataset, the test dataset.
+    """
+    # Set femnist and data path
+    FL_BENCH_ROOT = Path(__file__).parent.parent
+    data_root = FL_BENCH_ROOT / Path(PATHS[dataset_name])
+    data_dir = data_root / 'data'
+    data_path = data_dir / f'{dataset_name}.csv'
+
+    if not _check_data_gen(data_dir):
+        _gen_leaf_data(data_root, dataset_name)
+
+    # Create femnist df if not exists
+    if not data_path.exists():
+        _create_df(data_dir, tag=f'{dataset_name}')
+
+    # Read data
+    data = pd.read_csv(data_path)
+
+    if fraction is not None:
+        data = data.sample(frac=fraction)
+        data = data.reset_index(drop=True)
+
+    # remove columns with 95% of the same value
+    if dataset_name == 'femnist':
+        print("Number of columns: ", len(data.columns))
+        for col in data.columns:
+            if data[col].value_counts(normalize=True).values[0] > 0.95:
+                data.drop(col, axis=1, inplace=True)
+        print("Number of columns after removing columns with 95% of the same value: ", len(data.columns))
+
+    # encode user column
+    user_encoder = {user: i for i, user in enumerate(data['user'].unique())}
+    data['user'] = data['user'].apply(lambda x: user_encoder[x])
+
+    return data
+    # Create train and test set
+    trainset, testset = train_test_split(data, test_size=0.1, random_state=42)

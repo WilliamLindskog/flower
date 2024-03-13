@@ -47,11 +47,15 @@ import pandas as pd
 from typing import Callable, Optional
 
 import random
+import json
 
 from treesXnets.partitioner.shard_partitioner import ShardPartitioner
 
 from typing import Callable, Optional
 import pandas as pd
+from pathlib import Path
+import os
+import subprocess
 
 def get_partitioner(partition_name: str, id_col: Optional[str] = None) -> Callable:
     """Return the partitioner function given its name.
@@ -148,3 +152,111 @@ def _label_partition(
         
     return df
     
+
+def _gen_leaf_data(data_root: Path, dataset_name: str) -> None:
+    """ Generate leaf data.
+    
+    Parameters
+    ----------
+    data_root : Path
+        Path to data root.
+    dataset_name : str
+        Name of dataset.
+        
+    Returns
+    -------
+    None
+    """
+
+    cwd = os.getcwd()
+    os.chdir(data_root)
+
+    # run subprocess to generate data
+    if dataset_name == 'femnist':
+        subprocess.run(
+            [   
+                
+                'bash', 
+                './preprocess.sh',
+                '-s', "niid", 
+                '--sf', "0.2",
+                '-k', "128",
+                '-t', 'sample'
+            ]
+        )
+    else:
+        subprocess.run(
+            [   
+                'python', 
+                './main.py',
+                '-num-tasks', "3000", 
+                '-num-classes', "10",
+                '-num-dim', "20",
+            ]
+        )
+
+        subprocess.run(
+            [   
+                'bash', 
+                './preprocess.sh',
+                '--sf', "1.0", 
+                '-k', "128",
+                '-t', "sample",
+            ]
+        )
+
+    os.chdir(cwd)
+
+def _check_data_gen(data_path: Path) -> bool:
+    """ Check if data is already generated.
+    
+    Parameters
+    ----------
+    data_path : Path
+        Path to data.
+
+    Returns
+    -------
+    bool
+        True if data is already generated, False otherwise.
+    """
+    return (data_path / 'train').exists() and (data_path / 'test').exists()
+
+def _create_df(data_dir: Path, tag: str = None) -> None:
+    """ Create femnist df.
+    
+    Parameters
+    ----------
+    data_path : Path
+        Path to data.
+    femnist_data_path : Path
+        Path to femnist data.
+        
+    Returns
+    -------
+    None
+    """
+
+    train_path, test_path = data_dir / 'train', data_dir / 'test'
+    df_list = []
+    for _, path in enumerate([train_path, test_path]):
+        for file in path.glob('*'):
+            print(file)
+            with open(file) as f:
+                data = json.load(f)
+                users = data['users']
+                for user in users:
+                    user_data = {'x': data['user_data'][user]['x'], 'y': data['user_data'][user]['y']}
+                    for i in range(len(user_data['x'])):
+                        user_data['x'][i] = np.array(user_data['x'][i])
+                        for j in range(len(user_data['x'][i])):
+                            user_data[f'x_{j}'] = user_data['x'][i][j]
+                        user_data['y'][i] = np.array(user_data['y'][i])
+                        df_temp = pd.DataFrame({k: [v] for k, v in user_data.items() if k not in ['x', 'y']})
+                        df_temp['y'] = user_data['y'][i]
+                        df_temp['user'] = user
+                        df_list.append(df_temp)
+    # name df based on n
+    df = pd.concat(df_list)
+    data_path = data_dir / f'{tag}.csv'
+    df.to_csv(data_path, index=False)

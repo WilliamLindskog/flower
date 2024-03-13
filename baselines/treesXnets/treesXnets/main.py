@@ -178,7 +178,7 @@ def main(cfg: DictConfig) -> None:
             save_path,
             (file_suffix),
             metric_type='centralized' if cfg.centralized_eval else 'decentralized',
-            regression=True if cfg.model.output_dim == 1 else False,
+            task=cfg.task,
             model_name=cfg.model_name,
         )
     else: 
