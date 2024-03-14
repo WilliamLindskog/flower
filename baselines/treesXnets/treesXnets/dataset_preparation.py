@@ -83,8 +83,6 @@ def get_partitioner(partition_name: str, id_col: Optional[str] = None) -> Callab
         return ExponentialPartitioner
     elif partition_name in ["iid", "label"]:
         return IidPartitioner
-    #elif partition_name == "label":
-    #    return ShardPartitioner
     elif partition_name == "dirichlet":
         return DirichletPartitioner
     else:
@@ -151,6 +149,43 @@ def _label_partition(
         df.loc[idx_clients[i], id_col] = i
         
     return df
+
+def _gaussian_noise_partition(
+        df: pd.DataFrame, target_col: str,
+        sigma: float = 0.1
+    ) -> pd.DataFrame:
+    """    Specifically, given user-defined noise level σ, we add noises
+            xˆ ∼ Gau(σ · i/N) for Party Pi
+            , where Gau(σ · i/N) is
+            a Gaussian distribution with mean 0 and variance σ · i/N.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        The dataset to be partitioned.
+    num_clients : int
+        The number of clients.
+    id_col : str
+        The name of the column that contains the client id.
+    target_col : str
+        The name of the column that contains the target.
+    sigma : float, optional
+        The standard deviation of the Gaussian noise, by default 0.1.
+
+    Returns
+    -------
+    pd.DataFrame
+        The partitioned dataset.
+    """
+
+    # add noise to each feature (i.e. not the target)
+    # also, only add noise to continuous features and not categorical ones
+    for col in df.columns:
+        if col not in [target_col, "ID"] and df[col].dtype != 'object':
+            df[col] += np.random.normal(0, sigma, len(df))
+
+    return df
+
     
 
 def _gen_leaf_data(data_root: Path, dataset_name: str) -> None:

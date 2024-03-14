@@ -23,7 +23,10 @@ from flwr_datasets.partitioner import (
     SquarePartitioner, ExponentialPartitioner, # ShardPartitioner, DirichletPartitioner
 )
 from treesXnets.constants import TARGET, TASKS, NUM_CLASSES
-from treesXnets.dataset_preparation import get_partitioner, _label_partition, _check_data_gen, _gen_leaf_data, _create_df
+from treesXnets.dataset_preparation import (
+    get_partitioner, _label_partition, _check_data_gen, _gen_leaf_data, _create_df,
+    _gaussian_noise_partition
+)
 from treesXnets.partitioner.shard_partitioner import ShardPartitioner
 
 PATHS = {
@@ -46,27 +49,30 @@ def load_data(cfg: DictConfig, task: str) -> FederatedDataset:
     Federated Dataset.
     """
 
+    dataset_name = cfg.name
+
     if cfg.name in ["femnist", "synthetic"]:
         df = _download_data(cfg.name, cfg.fraction)
         cfg.num_input = len(df.columns)-2
-        cfg.num_classes = NUM_CLASSES[cfg.name]
+        cfg.num_classes = NUM_CLASSES[dataset_name]
         # set column "user" to "ID"
         df.rename(columns={"user": "ID"}, inplace=True)
+
+        if cfg.partition == "label":
+            df = _label_partition(df, cfg.num_clients, "ID", TARGET[dataset_name], cfg.num_labels_allotted)
+        elif cfg.partition == "gaussian":
+            df = _gaussian_noise_partition(df, TARGET[dataset_name], cfg.noise)
+
         return df, cfg
     else:
         fds = _get_federated_data(hf_dataset="inria-soda/tabular-benchmark",config=cfg,)
     
-
-    dataset_name = cfg.name
     df_list = []
     for client_id in range(cfg.num_clients):
         df = DataFrame(fds.load_partition(client_id))
         df["ID"] = client_id
         df_list.append(df)
     df = DataFrame(concat(df_list, ignore_index=True))
-
-    if cfg.partition == "label":
-        df = _label_partition(df, cfg.num_clients, "ID", TARGET[dataset_name])
 
     # Get number of input features and classes
     cfg.num_input = len(df.columns)-2
@@ -85,6 +91,12 @@ def load_data(cfg: DictConfig, task: str) -> FederatedDataset:
         # ensure that target value starts at 0
         if df[TARGET[dataset_name]].min() != 0:
             df[TARGET[dataset_name]] -= df[TARGET[dataset_name]].min()
+
+    if cfg.partition == "label":
+        df = _label_partition(df, cfg.num_clients, "ID", TARGET[dataset_name], cfg.num_labels_allotted)
+    elif cfg.partition == "gaussian":
+        df = _gaussian_noise_partition(df, cfg.num_clients, "ID", TARGET[dataset_name], cfg.noise)
+
     return df, cfg
 
 

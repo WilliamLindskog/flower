@@ -268,7 +268,7 @@ def plot_metric_from_history(
     save_plot_path: Path,
     suffix: Optional[str] = "",
     metric_type: Optional[str] = "centralized",
-    regression: Optional[bool] = False,
+    task: Optional[str] = "regression",
     model_name: Optional[str] = "mlp",
 ) -> None:
     """Plot from Flower server History.
@@ -289,15 +289,21 @@ def plot_metric_from_history(
     )
     print(metric_dict)
 
-    if regression:
+    if task == "regression":
         # get mse and r2 values from metric_dict
         m1, m2 = "mse", "r2"
         _, values_m1 = zip(*metric_dict[m1])
         _, values_m2 = zip(*metric_dict[m2])
         values_m1 = tuple(x for x in values_m1)
         values_m2 = tuple(x for x in values_m2)
-    else:
+    elif task == 'binary':
         m1, m2 = "accuracy", "auc"
+        _, values_m1 = zip(*metric_dict[m1])
+        _, values_m2 = zip(*metric_dict[m2])
+        values_m1 = tuple(x for x in values_m1)
+        values_m2 = tuple(x for x in values_m2)
+    else:
+        m1, m2 = "accuracy", "f1"
         _, values_m1 = zip(*metric_dict[m1])
         _, values_m2 = zip(*metric_dict[m2])
         values_m1 = tuple(x for x in values_m1)
@@ -328,12 +334,15 @@ def plot_metric_from_history(
 
     axs[0].set_ylabel("Loss")
 
-    if regression:
+    if task == "regression":
         axs[1].set_ylabel("MSE")
         axs[2].set_ylabel("R2")
-    else:
+    elif task == "binary":
         axs[1].set_ylabel("Accuracy")
         axs[2].set_ylabel("AUC")
+    else:
+        axs[1].set_ylabel("Accuracy")
+        axs[2].set_ylabel("F1")
 
     # plt.title(f"{metric_type.capitalize()} Validation - MNIST")
     plt.xlabel("Rounds")
