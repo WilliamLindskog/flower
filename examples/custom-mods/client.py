@@ -58,9 +58,8 @@ def client_fn(cid: str):
 
 def get_wandb_mod(name: str) -> Mod:
     def wandb_mod(msg: Message, context: Context, app: ClientAppCallable) -> Message:
-        """Flower Mod that logs the metrics dictionary returned by the client's
-        fit function to Weights & Biases.
-        """
+        """Flower Mod that logs the metrics dictionary returned by the client's fit
+        function to Weights & Biases."""
         server_round = int(msg.metadata.group_id)
 
         if server_round == 1 and msg.metadata.message_type == MessageType.TRAIN:
@@ -87,7 +86,6 @@ def get_wandb_mod(name: str) -> Mod:
 
         # if the `ClientApp` just processed a "fit" message, let's log some metrics to W&B
         if reply.metadata.message_type == MessageType.TRAIN and reply.has_content():
-
             metrics = reply.content.configs_records
 
             results_to_log = dict(metrics.get("fitres.metrics", ConfigsRecord()))
@@ -107,9 +105,8 @@ def get_tensorboard_mod(logdir) -> Mod:
     def tensorboard_mod(
         msg: Message, context: Context, app: ClientAppCallable
     ) -> Message:
-        """Flower Mod that logs the metrics dictionary returned by the client's
-        fit function to TensorBoard.
-        """
+        """Flower Mod that logs the metrics dictionary returned by the client's fit
+        function to TensorBoard."""
         logdir_run = os.path.join(logdir, str(msg.metadata.run_id))
 
         node_id = str(msg.metadata.dst_node_id)

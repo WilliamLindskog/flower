@@ -14,18 +14,17 @@
 # ==============================================================================
 """Flower client app."""
 
-
 import argparse
 import sys
 import time
-from logging import DEBUG, INFO, WARN
+from logging import DEBUG, ERROR, INFO, WARN
 from pathlib import Path
 from typing import Callable, ContextManager, Optional, Tuple, Type, Union
 
 from grpc import RpcError
 
 from flwr.client.client import Client
-from flwr.client.client_app import ClientApp
+from flwr.client.client_app import ClientApp, LoadClientAppError
 from flwr.client.typing import ClientFn
 from flwr.common import GRPC_MAX_MESSAGE_LENGTH, EventType, Message, event
 from flwr.common.address import parse_address
@@ -35,12 +34,14 @@ from flwr.common.constant import (
     TRANSPORT_TYPE_GRPC_RERE,
     TRANSPORT_TYPE_REST,
     TRANSPORT_TYPES,
+    ErrorCode,
 )
 from flwr.common.exit_handlers import register_exit_handlers
-from flwr.common.logger import log, warn_deprecated_feature, warn_experimental_feature
+from flwr.common.logger import log, warn_deprecated_feature
+from flwr.common.message import Error
+from flwr.common.object_ref import load_app, validate
 from flwr.common.retry_invoker import RetryInvoker, exponential
 
-from .client_app import load_client_app
 from .grpc_client.connection import grpc_connection
 from .grpc_rere_client.connection import grpc_request_response
 from .message_handler.message_handler import handle_control_message
@@ -97,8 +98,19 @@ def run_client_app() -> None:
     if client_app_dir is not None:
         sys.path.insert(0, client_app_dir)
 
+    app_ref: str = getattr(args, "client-app")
+    valid, error_msg = validate(app_ref)
+    if not valid and error_msg:
+        raise LoadClientAppError(error_msg) from None
+
     def _load() -> ClientApp:
-        client_app: ClientApp = load_client_app(getattr(args, "client-app"))
+        client_app = load_app(app_ref, LoadClientAppError)
+
+        if not isinstance(client_app, ClientApp):
+            raise LoadClientAppError(
+                f"Attribute {app_ref} is not of type {ClientApp}",
+            ) from None
+
         return client_app
 
     _start_client_internal(
@@ -374,8 +386,6 @@ def _start_client_internal(
             return ClientApp(client_fn=client_fn)
 
         load_client_app_fn = _load_client_app
-    else:
-        warn_experimental_feature("`load_client_app_fn`")
 
     # At this point, only `load_client_app_fn` should be used
     # Both `client` and `client_fn` must not be used directly
@@ -386,7 +396,7 @@ def _start_client_internal(
     )
 
     retry_invoker = RetryInvoker(
-        wait_factory=exponential,
+        wait_gen_factory=exponential,
         recoverable_exceptions=connection_error_type,
         max_tries=max_retries,
         max_time=max_wait_time,
@@ -445,7 +455,19 @@ def _start_client_internal(
                     time.sleep(3)  # Wait for 3s before asking again
                     continue
 
-                log(INFO, "Received message")
+                log(INFO, "")
+                log(
+                    INFO,
+                    "[RUN %s, ROUND %s]",
+                    message.metadata.run_id,
+                    message.metadata.group_id,
+                )
+                log(
+                    INFO,
+                    "Received: %s message %s",
+                    message.metadata.message_type,
+                    message.metadata.message_id,
+                )
 
                 # Handle control message
                 out_message, sleep_duration = handle_control_message(message)
@@ -459,20 +481,56 @@ def _start_client_internal(
                 # Retrieve context for this run
                 context = node_state.retrieve_context(run_id=message.metadata.run_id)
 
-                # Load ClientApp instance
-                client_app: ClientApp = load_client_app_fn()
-
-                # Handle task message
-                out_message = client_app(message=message, context=context)
-
-                # Update node state
-                node_state.update_context(
-                    run_id=message.metadata.run_id,
-                    context=context,
+                # Create an error reply message that will never be used to prevent
+                # the used-before-assignment linting error
+                reply_message = message.create_error_reply(
+                    error=Error(code=ErrorCode.UNKNOWN, reason="Unknown")
                 )
 
+                # Handle app loading and task message
+                try:
+                    # Load ClientApp instance
+                    client_app: ClientApp = load_client_app_fn()
+
+                    # Execute ClientApp
+                    reply_message = client_app(message=message, context=context)
+                except Exception as ex:  # pylint: disable=broad-exception-caught
+
+                    # Legacy grpc-bidi
+                    if transport in ["grpc-bidi", None]:
+                        log(ERROR, "Client raised an exception.", exc_info=ex)
+                        # Raise exception, crash process
+                        raise ex
+
+                    # Don't update/change NodeState
+
+                    e_code = ErrorCode.CLIENT_APP_RAISED_EXCEPTION
+                    # Reason example: "<class 'ZeroDivisionError'>:<'division by zero'>"
+                    reason = str(type(ex)) + ":<'" + str(ex) + "'>"
+                    exc_entity = "ClientApp"
+                    if isinstance(ex, LoadClientAppError):
+                        reason = (
+                            "An exception was raised when attempting to load "
+                            "`ClientApp`"
+                        )
+                        e_code = ErrorCode.LOAD_CLIENT_APP_EXCEPTION
+                        exc_entity = "SuperNode"
+
+                    log(ERROR, "%s raised an exception", exc_entity, exc_info=ex)
+
+                    # Create error message
+                    reply_message = message.create_error_reply(
+                        error=Error(code=e_code, reason=reason)
+                    )
+                else:
+                    # No exception, update node state
+                    node_state.update_context(
+                        run_id=message.metadata.run_id,
+                        context=context,
+                    )
+
                 # Send
-                send(out_message)
+                send(reply_message)
                 log(INFO, "Sent reply")
 
             # Unregister node

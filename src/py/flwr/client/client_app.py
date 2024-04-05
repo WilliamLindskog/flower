@@ -15,8 +15,7 @@
 """Flower ClientApp."""
 
 
-import importlib
-from typing import Callable, List, Optional, cast
+from typing import Callable, List, Optional
 
 from flwr.client.message_handler.message_handler import (
     handle_legacy_message_from_msgtype,
@@ -24,8 +23,18 @@ from flwr.client.message_handler.message_handler import (
 from flwr.client.mod.utils import make_ffn
 from flwr.client.typing import ClientFn, Mod
 from flwr.common import Context, Message, MessageType
+from flwr.common.logger import warn_preview_feature
 
 from .typing import ClientAppCallable
+
+
+class ClientAppException(Exception):
+    """Exception raised when an exception is raised while executing a ClientApp."""
+
+    def __init__(self, message: str):
+        ex_name = self.__class__.__name__
+        self.message = f"\nException {ex_name} occurred. Message: " + message
+        super().__init__(self.message)
 
 
 class ClientApp:
@@ -116,13 +125,15 @@ class ClientApp:
         >>> def train(message: Message, context: Context) -> Message:
         >>>    print("ClientApp training running")
         >>>    # Create and return an echo reply message
-        >>>    return message.create_reply(content=message.content(), ttl="")
+        >>>    return message.create_reply(content=message.content())
         """
 
         def train_decorator(train_fn: ClientAppCallable) -> ClientAppCallable:
             """Register the train fn with the ServerApp object."""
             if self._call:
                 raise _registration_error(MessageType.TRAIN)
+
+            warn_preview_feature("ClientApp-register-train-function")
 
             # Register provided function with the ClientApp object
             # Wrap mods around the wrapped step function
@@ -144,13 +155,15 @@ class ClientApp:
         >>> def evaluate(message: Message, context: Context) -> Message:
         >>>    print("ClientApp evaluation running")
         >>>    # Create and return an echo reply message
-        >>>    return message.create_reply(content=message.content(), ttl="")
+        >>>    return message.create_reply(content=message.content())
         """
 
         def evaluate_decorator(evaluate_fn: ClientAppCallable) -> ClientAppCallable:
             """Register the evaluate fn with the ServerApp object."""
             if self._call:
                 raise _registration_error(MessageType.EVALUATE)
+
+            warn_preview_feature("ClientApp-register-evaluate-function")
 
             # Register provided function with the ClientApp object
             # Wrap mods around the wrapped step function
@@ -172,13 +185,15 @@ class ClientApp:
         >>> def query(message: Message, context: Context) -> Message:
         >>>    print("ClientApp query running")
         >>>    # Create and return an echo reply message
-        >>>    return message.create_reply(content=message.content(), ttl="")
+        >>>    return message.create_reply(content=message.content())
         """
 
         def query_decorator(query_fn: ClientAppCallable) -> ClientAppCallable:
             """Register the query fn with the ServerApp object."""
             if self._call:
                 raise _registration_error(MessageType.QUERY)
+
+            warn_preview_feature("ClientApp-register-query-function")
 
             # Register provided function with the ClientApp object
             # Wrap mods around the wrapped step function
@@ -192,51 +207,6 @@ class ClientApp:
 
 class LoadClientAppError(Exception):
     """Error when trying to load `ClientApp`."""
-
-
-def load_client_app(module_attribute_str: str) -> ClientApp:
-    """Load the `ClientApp` object specified in a module attribute string.
-
-    The module/attribute string should have the form <module>:<attribute>. Valid
-    examples include `client:app` and `project.package.module:wrapper.app`. It
-    must refer to a module on the PYTHONPATH, the module needs to have the specified
-    attribute, and the attribute must be of type `ClientApp`.
-    """
-    module_str, _, attributes_str = module_attribute_str.partition(":")
-    if not module_str:
-        raise LoadClientAppError(
-            f"Missing module in {module_attribute_str}",
-        ) from None
-    if not attributes_str:
-        raise LoadClientAppError(
-            f"Missing attribute in {module_attribute_str}",
-        ) from None
-
-    # Load module
-    try:
-        module = importlib.import_module(module_str)
-    except ModuleNotFoundError:
-        raise LoadClientAppError(
-            f"Unable to load module {module_str}",
-        ) from None
-
-    # Recursively load attribute
-    attribute = module
-    try:
-        for attribute_str in attributes_str.split("."):
-            attribute = getattr(attribute, attribute_str)
-    except AttributeError:
-        raise LoadClientAppError(
-            f"Unable to load attribute {attributes_str} from module {module_str}",
-        ) from None
-
-    # Check type
-    if not isinstance(attribute, ClientApp):
-        raise LoadClientAppError(
-            f"Attribute {attributes_str} is not of type {ClientApp}",
-        ) from None
-
-    return cast(ClientApp, attribute)
 
 
 def _registration_error(fn_name: str) -> ValueError:
@@ -264,7 +234,7 @@ def _registration_error(fn_name: str) -> ValueError:
         >>>    print("ClientApp {fn_name} running")
         >>>    # Create and return an echo reply message
         >>>    return message.create_reply(
-        >>>        content=message.content(), ttl=""
+        >>>        content=message.content()
         >>>    )
         """,
     )
