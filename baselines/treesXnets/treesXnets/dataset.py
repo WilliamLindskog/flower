@@ -62,7 +62,6 @@ def load_data(cfg: DictConfig, task: str) -> FederatedDataset:
             df = _label_partition(df, cfg.num_clients, "ID", TARGET[dataset_name], cfg.num_labels_allotted)
         elif cfg.partition == "gaussian":
             df = _gaussian_noise_partition(df, TARGET[dataset_name], cfg.noise)
-
         return df, cfg
     else:
         fds = _get_federated_data(hf_dataset="inria-soda/tabular-benchmark",config=cfg,)
@@ -95,7 +94,7 @@ def load_data(cfg: DictConfig, task: str) -> FederatedDataset:
     if cfg.partition == "label":
         df = _label_partition(df, cfg.num_clients, "ID", TARGET[dataset_name], cfg.num_labels_allotted)
     elif cfg.partition == "gaussian":
-        df = _gaussian_noise_partition(df, cfg.num_clients, "ID", TARGET[dataset_name], cfg.noise)
+        df = _gaussian_noise_partition(df, TARGET[dataset_name], cfg.noise)
 
     return df, cfg
 

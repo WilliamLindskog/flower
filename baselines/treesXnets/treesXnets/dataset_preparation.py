@@ -81,10 +81,8 @@ def get_partitioner(partition_name: str, id_col: Optional[str] = None) -> Callab
         return SquarePartitioner
     elif partition_name == "exponential":
         return ExponentialPartitioner
-    elif partition_name in ["iid", "label"]:
+    elif partition_name in ["iid", "label", "gaussian"]:
         return IidPartitioner
-    elif partition_name == "dirichlet":
-        return DirichletPartitioner
     else:
         raise ValueError(f"Partitioner {partition_name} not found.")
     
@@ -179,9 +177,10 @@ def _gaussian_noise_partition(
     """
 
     # add noise to each feature (i.e. not the target)
-    # also, only add noise to continuous features and not categorical ones
+    # also, only add noise to continuous features and not categorical ones (i.e. values other than int or floats that end with .0)
     for col in df.columns:
-        if col not in [target_col, "ID"] and df[col].dtype != 'object':
+        
+        if col not in [target_col, "ID"] and df[col].dtype in [int, float] and not str(df[col].dtype).endswith(".0"):
             df[col] += np.random.normal(0, sigma, len(df))
 
     return df
